@@ -1,0 +1,8 @@
+.env
+__pycache__/
+output/
+temp/
+*.stl
+*.glb
+node_modules/
+dist/
