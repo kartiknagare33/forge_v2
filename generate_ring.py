@@ -5,16 +5,9 @@ import math
 # Ring Parameters
 # -------------------------------
 
-params = {
-    "ring_diameter": 17.2,      # mm inner diameter
-    "band_width": 2.2,          # mm
-    "band_thickness": 1.8,      # mm
+from fpl_parser import parse_fpl
 
-    "stone_diameter": 6.5,      # mm
-    "prong_count": 6,
-    "prong_diameter": 0.9,
-}
-
+params = parse_fpl("ring.fpl")
 # -------------------------------
 # Create Ring Shank
 # -------------------------------
