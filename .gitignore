@@ -1,0 +1,10 @@
+# Dependency directories
+node_modules/
+__pycache__/
+
+# Environment variables (CRITICAL: Do not leak keys!)
+.env
+
+# Output folder (Do not commit massive 3D models or images)
+output/*
+!output/.gitkeep
