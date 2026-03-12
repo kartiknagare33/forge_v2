@@ -9,9 +9,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.5.0",
+    "axios": "^1.13.6",
+    "lucide-react": "^0.577.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "three": "^0.160.0"
+    "three": "^0.160.1"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.1",
