@@ -4,8 +4,12 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
+# Our custom pipeline modules
 from trellis_client import TrellisClient
 from gemini_service import GeminiService
+from mesh_renderer import MeshRenderer
+from sam2_client import SAM2Client
+from mesh_segmentor import MeshSegmentor
 
 app = FastAPI(title="FORGE API")
 
@@ -21,9 +25,12 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "output"))
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Initialize external services
+# Initialize the FORGE Compiler Engine
 trellis = TrellisClient()
 gemini = GeminiService()
+renderer = MeshRenderer()
+sam2 = SAM2Client()
+segmentor = MeshSegmentor()
 
 @app.get("/health")
 async def health_check():
@@ -31,34 +38,50 @@ async def health_check():
 
 @app.post("/process")
 async def process_jewelry(file: UploadFile = File(...)):
-    print(f"\n--- NEW PROCESSING RUN: {file.filename} ---")
+    print(f"\n{'='*40}")
+    print(f"FORGE COMPILATION STARTED: {file.filename}")
+    print(f"{'='*40}")
     
     # 1. Save uploaded file temporarily
     temp_input_path = os.path.join(OUTPUT_DIR, file.filename)
     with open(temp_input_path, "wb") as buffer:
         buffer.write(await file.read())
         
-    # 2. Run Gemini Extraction (Takes ~2-3 seconds)
+    # 2. Gemini Property Extraction
     extracted_params = gemini.analyze_jewelry(temp_input_path)
     
-    # 3. Run TRELLIS pipeline (Takes 60-90 seconds)
+    # 3. TRELLIS Mesh Generation
     glb_filepath = trellis.generate_glb(temp_input_path, OUTPUT_DIR)
     
-    # 4. Read GLB and encode to base64
+    # 4. Mesh Rendering (Take 4 pictures)
+    print("Capturing 4-angle views for SAM2...")
+    render_paths = renderer.render_4_views(glb_filepath, OUTPUT_DIR)
+    
+    # 5. SAM2 Segmentation
+    print("Querying SAM2 for semantic component masks...")
+    component_masks = {}
+    prompts = {"stone": "gemstone", "metal": "metal band", "prong": "prongs"}
+    
+    for view_path in render_paths:
+        view_name = os.path.basename(view_path).replace("render_", "").replace(".png", "")
+        for key, prompt in prompts.items():
+            mask = sam2.get_mask(view_path, prompt)
+            component_masks[f"{view_name}_{key}"] = mask
+            
+    # 6. SAMesh Compilation (Raycast masks to 3D faces)
+    face_tags = segmentor.compile_tags(glb_filepath, component_masks, OUTPUT_DIR)
+    
+    # 7. Package and Ship
     with open(glb_filepath, "rb") as f:
         glb_b64 = base64.b64encode(f.read()).decode('utf-8')
     
-    # 5. Return combined payload
+    print("\n[✔] COMPILATION COMPLETE. Returning payload to frontend.")
     return {
         "success": True,
         "glb_b64": glb_b64,
-        "face_tags": {
-            "stone_faces": [],
-            "metal_faces": [],
-            "prong_faces": []
-        },
-        "params": extracted_params  # <--- Now injecting the dynamic Gemini data!
+        "face_tags": face_tags,
+        "params": extracted_params
     }
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
