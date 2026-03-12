@@ -6,26 +6,20 @@ import { Upload, Cpu, Settings2, Sparkles, DollarSign, AlertCircle } from 'lucid
 function App() {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState(null);
-  
-  // Default to Platinum & Diamond
   const [materials, setMaterials] = useState({ metal: '#E5E4E2', stone: '#FFFFFF' });
   const [targetBudget, setTargetBudget] = useState('');
 
-  // --- HACKATHON MAGIC: The Pricing Algorithm ---
   const calculateCost = (mats) => {
-    let cost = 500; // Base manufacturing cost
-    
-    // Stone costs
-    if (mats.stone === '#FFFFFF') cost += 3500; // Diamond
-    else if (mats.stone === '#E0115F') cost += 1200; // Ruby
-    else if (mats.stone === '#0F52BA') cost += 1000; // Sapphire
-    else if (mats.stone === '#F4F4F4') cost += 300;  // Moissanite (Budget option)
+    let cost = 500; 
+    if (mats.stone === '#FFFFFF') cost += 3500;
+    else if (mats.stone === '#E0115F') cost += 1200;
+    else if (mats.stone === '#0F52BA') cost += 1000;
+    else if (mats.stone === '#F4F4F4') cost += 300; 
 
-    // Metal costs
-    if (mats.metal === '#E5E4E2') cost += 1200; // Platinum
-    else if (mats.metal === '#FFD700') cost += 800; // Gold
-    else if (mats.metal === '#B76E79') cost += 800; // Rose Gold
-    else if (mats.metal === '#C0C0C0') cost += 150; // Silver (Budget option)
+    if (mats.metal === '#E5E4E2') cost += 1200;
+    else if (mats.metal === '#FFD700') cost += 800;
+    else if (mats.metal === '#B76E79') cost += 800;
+    else if (mats.metal === '#C0C0C0') cost += 150;
 
     return cost;
   };
@@ -44,11 +38,15 @@ function App() {
     try {
       const res = await axios.post('http://localhost:8000/process', formData);
       setData(res.data);
-      if(res.data.params.material.toLowerCase().includes('rose')) setMaterials(m => ({...m, metal: '#B76E79'}));
-      if(res.data.params.material.toLowerCase().includes('gold')) setMaterials(m => ({...m, metal: '#FFD700'}));
+      
+      // SAFE CHECK: Use 'metal' instead of 'material', and prevent crashes if it's missing!
+      const detectedMetal = res.data.params?.metal || res.data.params?.material || '';
+      if(detectedMetal.toLowerCase().includes('rose')) setMaterials(m => ({...m, metal: '#B76E79'}));
+      if(detectedMetal.toLowerCase().includes('gold') && !detectedMetal.toLowerCase().includes('rose')) setMaterials(m => ({...m, metal: '#FFD700'}));
+      
     } catch (err) {
       console.error("Upload failed", err);
-      alert("Backend error! Make sure main.py is running.");
+      alert("Backend error! Make sure main.py is running and check the terminal.");
     } finally {
       setLoading(false);
     }
@@ -58,32 +56,31 @@ function App() {
     <div className="min-h-screen bg-[#050508] text-white p-8 font-sans">
       <header className="max-w-6xl mx-auto flex justify-between items-center mb-8">
         <div>
-          <h1 className="text-4xl font-black tracking-tighter italic">FORGE<span className="text-blue-500">.V2</span></h1>
-          <p className="text-zinc-500 text-sm mt-1">2D-to-3D Semantic Compiler</p>
+          <h1 className="text-4xl font-black tracking-tighter italic">FORGE<span className="text-blue-500">.CAD</span></h1>
+          <p className="text-zinc-500 text-sm mt-1">Parametric AI Compiler</p>
         </div>
         <label className="cursor-pointer bg-blue-600 hover:bg-blue-500 px-6 py-3 rounded-full flex items-center gap-2 transition-all font-semibold">
           <Upload size={20} />
-          <span>{loading ? "Compiling..." : "Upload Blueprint"}</span>
+          <span>{loading ? "Compiling Math..." : "Upload Blueprint"}</span>
           <input type="file" className="hidden" onChange={handleUpload} disabled={loading} />
         </label>
       </header>
 
       <main className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 bg-zinc-900/40 border border-zinc-800/50 p-2 rounded-3xl min-h-[500px] flex items-center justify-center relative">
-          {loading && <div className="absolute inset-0 z-10 bg-black/80 flex items-center justify-center rounded-3xl backdrop-blur-sm animate-pulse"><p className="text-xl font-bold text-blue-400">Compiling via Trellis & SAM2...</p></div>}
+          {loading && <div className="absolute inset-0 z-10 bg-black/80 flex items-center justify-center rounded-3xl backdrop-blur-sm animate-pulse"><p className="text-xl font-bold text-blue-400">Generating CAD Geometry...</p></div>}
           
           {data ? (
-            <JewelryViewer glbBase64={data.glb_b64} faceTags={data.face_tags} materials={materials} />
+            <JewelryViewer glbBase64={data.glb_b64} materials={materials} />
           ) : (
             <div className="text-zinc-600 text-center">
               <Sparkles size={48} className="mx-auto mb-4 opacity-20" />
-              <p>Upload a jewelry photo to generate the interactive model.</p>
+              <p>Upload a jewelry photo to generate a manufacturable CAD model.</p>
             </div>
           )}
         </div>
 
         <div className="space-y-6">
-          {/* Smart Budget Panel */}
           <section className={`p-6 rounded-3xl border transition-colors ${isOverBudget ? 'bg-red-950/20 border-red-900/50' : 'bg-zinc-900/60 border-zinc-800'}`}>
             <h3 className="flex items-center gap-2 text-lg font-bold mb-4 text-white">
               <DollarSign size={18} className={isOverBudget ? 'text-red-400' : 'text-emerald-400'} /> 
@@ -146,6 +143,24 @@ function App() {
                 </div>
               </div>
             </div>
+          </section>
+
+          <section className="bg-zinc-900/60 border border-zinc-800 p-6 rounded-3xl">
+            <h3 className="flex items-center gap-2 text-lg font-bold mb-4 text-white">
+              <Cpu size={18} className="text-blue-400"/> PARAMETRIC DATA
+            </h3>
+            {data ? (
+              <div className="space-y-3 text-sm">
+                <div className="flex justify-between border-b border-zinc-800/50 pb-2">
+                  <span className="text-zinc-500">Geometry Type</span>
+                  <span className="capitalize font-medium text-zinc-200">{data.params.jewelry_type}</span>
+                </div>
+                <div className="flex justify-between border-b border-zinc-800/50 pb-2">
+                  <span className="text-zinc-500">Stone Diameter</span>
+                  <span className="capitalize font-medium text-zinc-200">{data.params.stone_size_mm} mm</span>
+                </div>
+              </div>
+            ) : <p className="text-zinc-600 text-sm">Waiting for compilation...</p>}
           </section>
         </div>
       </main>

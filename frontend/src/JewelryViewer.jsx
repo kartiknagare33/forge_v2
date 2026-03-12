@@ -1,10 +1,15 @@
-import React, { useEffect, useState } from 'react';
-import { Canvas } from '@react-three/fiber';
-import { OrbitControls, Stage, PerspectiveCamera, Environment } from '@react-three/drei';
-import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
+import React, { useEffect, useState } from "react";
+import { Canvas } from "@react-three/fiber";
+import {
+  OrbitControls,
+  Environment,
+  PerspectiveCamera,
+  Center,
+} from "@react-three/drei";
+import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 
-const JewelryMesh = ({ glbBase64, faceTags, materialsConfigs }) => {
+const JewelryMesh = ({ glbBase64, materialsConfigs }) => {
   const [scene, setScene] = useState(null);
 
   useEffect(() => {
@@ -13,82 +18,91 @@ const JewelryMesh = ({ glbBase64, faceTags, materialsConfigs }) => {
     const binary = atob(glbBase64);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const blob = new Blob([bytes], { type: 'model/gltf-binary' });
+    const blob = new Blob([bytes], { type: "model/gltf-binary" });
     const url = URL.createObjectURL(blob);
 
     const loader = new GLTFLoader();
     loader.load(url, (gltf) => {
       const loadedScene = gltf.scene;
 
-      // --- PREMIUM SHADERS ---
+      // 1. PBR Metal Material (High polish, lacquer shine)
       const metalMat = new THREE.MeshPhysicalMaterial({
         color: new THREE.Color(materialsConfigs.metal),
         metalness: 1.0,
-        roughness: 0.1, // Highly polished
-        envMapIntensity: 2.0,
-        clearcoat: 0.5,
+        roughness: 0.05,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.02,
+        envMapIntensity: 2.5,
       });
 
+      // 2. Premium Diamond Transmission Material
       const stoneMat = new THREE.MeshPhysicalMaterial({
         color: new THREE.Color(materialsConfigs.stone),
-        metalness: 0.1,
-        roughness: 0.05,
-        transmission: 0.95, // Makes it look like glass/crystal
-        ior: 2.4, // Diamond Index of Refraction
-        thickness: 0.5, // Refraction thickness
+        metalness: 0.0,
+        roughness: 0.0,
+        transmission: 0.95, // Glass/Diamond effect
+        ior: 2.41, // Diamond index of refraction
+        thickness: 2.0, // Volume for refraction
+        dispersion: 0.02, // Rainbow sparkle (Requires newer Three.js versions, degrades gracefully)
         envMapIntensity: 3.0,
         clearcoat: 1.0,
       });
 
-      const prongMat = new THREE.MeshPhysicalMaterial({
-        color: new THREE.Color(materialsConfigs.metal).multiplyScalar(0.9),
-        metalness: 1.0,
-        roughness: 0.2,
-      });
-
-      const materialArray = [metalMat, stoneMat, prongMat];
-
+      // Apply materials based on CadQuery assembly names
       loadedScene.traverse((child) => {
         if (child.isMesh) {
-          const geometry = child.geometry;
-          child.material = materialArray;
-          geometry.clearGroups();
-
-          const faceToMat = {};
-          if (faceTags.metal_faces) faceTags.metal_faces.forEach(f => faceToMat[f] = 0);
-          if (faceTags.stone_faces) faceTags.stone_faces.forEach(f => faceToMat[f] = 1);
-          if (faceTags.prong_faces) faceTags.prong_faces.forEach(f => faceToMat[f] = 2);
-
-          const numFaces = geometry.index ? geometry.index.count / 3 : geometry.attributes.position.count / 3;
-          
-          for (let i = 0; i < numFaces; i++) {
-            const matIndex = faceToMat[i] !== undefined ? faceToMat[i] : 0;
-            geometry.addGroup(i * 3, 3, matIndex);
+          // CadQuery names the parts based on the assembly
+          if (child.name.includes("metal_body")) {
+            child.material = metalMat;
+          } else if (child.name.includes("stone_body")) {
+            child.material = stoneMat;
           }
-          // Compute vertex normals to make the melted mesh look smoother
-          geometry.computeVertexNormals(); 
+          // Compute sharp normals for clean CAD look
+          child.geometry.computeVertexNormals();
         }
       });
 
       setScene(loadedScene);
       return () => URL.revokeObjectURL(url);
     });
-  }, [glbBase64, faceTags, materialsConfigs]);
+  }, [glbBase64, materialsConfigs]);
 
   if (!scene) return null;
-  return <primitive object={scene} />;
+  return (
+    <Center>
+      <primitive object={scene} />
+    </Center>
+  );
 };
 
-export default function JewelryViewer({ glbBase64, faceTags, materials }) {
+export default function JewelryViewer({ glbBase64, materials }) {
   return (
-    <div className="w-full h-[500px] bg-[#0a0a0a] rounded-xl overflow-hidden shadow-2xl border border-zinc-800 relative">
-      <Canvas shadows>
-        <PerspectiveCamera makeDefault position={[0, 0, 5]} />
-        {/* Changed environment to 'sunset' for beautiful warm light reflections */}
-        <Stage intensity={0.8} environment="sunset" adjustCamera={1.2}>
-           <JewelryMesh glbBase64={glbBase64} faceTags={faceTags} materialsConfigs={materials} />
-        </Stage>
-        <OrbitControls makeDefault autoRotate autoRotateSpeed={2.0} />
+    <div className="w-full h-[500px] bg-[#050508] rounded-xl overflow-hidden shadow-2xl border border-zinc-800 relative">
+      <Canvas
+        shadows
+        gl={{
+          toneMapping: THREE.ACESFilmicToneMapping,
+          toneMappingExposure: 1.5,
+          antialias: true,
+        }}
+      >
+        <PerspectiveCamera makeDefault position={[0, 15, 25]} fov={35} />
+
+        {/* Polyhaven Studio Small HDRI for photorealistic reflections */}
+        <Environment
+          files="https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/studio_small_03_1k.hdr"
+          background={false}
+        />
+
+        <JewelryMesh glbBase64={glbBase64} materialsConfigs={materials} />
+
+        {/* Smooth, premium auto-rotation */}
+        <OrbitControls
+          makeDefault
+          autoRotate
+          autoRotateSpeed={1.0}
+          enablePan={false}
+        />
       </Canvas>
     </div>
   );
