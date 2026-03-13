@@ -1,80 +1,80 @@
 import os
+import json
+import subprocess
 import base64
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 import uvicorn
 
+load_dotenv()
 from gemini_service import GeminiService
-from instantmesh_client import InstantMeshClient
-from view_analyzer import ViewAnalyzer
-from mesh_analyzer import MeshAnalyzer
-from cad_engine import CADCompiler
 
-app = FastAPI(title="FORGE API — Advanced Multi-View Compiler")
+app = FastAPI()
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"],
+    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "output"))
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-print("Initializing full backend pipeline...")
 gemini = GeminiService()
-view_analyzer = ViewAnalyzer(model=gemini.model)
-instantmesh = InstantMeshClient()
-mesh_analyzer = MeshAnalyzer()
-compiler = CADCompiler()
 
-@app.post("/process")
-async def process_jewelry(file: UploadFile = File(...)):
-    print(f"\n{'='*50}\nFORGE COMPILATION STARTED: {file.filename}\n{'='*50}")
-    temp_path = os.path.join(OUTPUT_DIR, file.filename)
-    with open(temp_path, "wb") as buf:
-        buf.write(await file.read())
+BLENDER_PATH = r"C:\Program Files\Blender Foundation\Blender 5.0\blender.exe"
 
-    # 1. Base Pass
-    base_params = gemini.analyze_jewelry(temp_path)
-
-    # 2. InstantMesh (Views + GLB)
-    im_assets = instantmesh.generate_assets(temp_path, OUTPUT_DIR)
+@app.post("/analyze")
+async def analyze(file: UploadFile = File(...)):
+    print(f"\n{'='*50}\nFORGE BLENDER PIPELINE: {file.filename}")
     
-    # 3. Multi-View Targeted Extraction
-    view_params = view_analyzer.analyze_all_views(im_assets["views"])
+    img_path = os.path.join(OUTPUT_DIR, file.filename)
+    with open(img_path, "wb") as f:
+        f.write(await file.read())
 
-    # 4. Trimesh Real Dimensions
-    mesh_params = {}
-    if im_assets["glb"] and os.path.exists(im_assets["glb"]):
-        mesh_params = mesh_analyzer.analyze(im_assets["glb"])
-
-    # 5. Merge Strategy (DEFAULTS < Base < Views < Mesh)
-    final_params = {
-        "jewelry_type": "solitaire", "stone_cut": "round_brilliant", "prong_count": 4, 
-        "metal": "yellow_gold", "stone_material": "diamond", "band_width_mm": 2.2, "stone_size_mm": 6.5
-    }
-    final_params.update(base_params)
-    final_params.update({k: v for k, v in view_params.items() if v is not None})
-    
-    if mesh_params:
-        final_params["band_width_mm"] = mesh_params.get("band_width_mm", final_params["band_width_mm"])
-        final_params["stone_size_mm"] = mesh_params.get("stone_diameter_mm", final_params["stone_size_mm"])
-
-    print(f"\n[✔] FINAL MERGED PARAMETERS ({len(final_params)} total constraints)")
-
-    # 6. Compile CAD
+    # 1. Get AI Parameters (NO FAKING)
     try:
-        glb_path = os.path.join(OUTPUT_DIR, "compiled_model.glb")
-        compiler.compile_to_glb(final_params, glb_path)
-
-        with open(glb_path, "rb") as f:
-            glb_b64 = base64.b64encode(f.read()).decode("utf-8")
-
-        return {"success": True, "glb_b64": glb_b64, "params": final_params}
-
+        params = gemini.classify(img_path)
     except Exception as e:
-        print(f"[!!!] CAD ERROR: {e}")
-        return {"success": False, "error": str(e)}
+        print(f"\n[!!!] Gemini Rate Limit / Error: {e}")
+        if os.path.exists(img_path): os.remove(img_path)
+        # Be honest with the frontend
+        return {"success": False, "error": "AI Rate Limit Reached. Please wait 60 seconds."}
+
+    # 2. Save params to a temp file for Blender to read
+    temp_json_path = os.path.join(OUTPUT_DIR, "temp_params.json")
+    with open(temp_json_path, "w") as f:
+        json.dump(params, f)
+
+    # 3. Run Blender Headless
+    glb_output_path = os.path.join(OUTPUT_DIR, "blender_ring.glb")
+    blender_script = os.path.join(BASE_DIR, "blender_builder.py")
+    
+    print("[->] Triggering Headless Blender Subprocess...")
+    try:
+        result = subprocess.run([
+            BLENDER_PATH, 
+            "--background", 
+            "--python", blender_script, 
+            "--", temp_json_path, glb_output_path
+        ], capture_output=True, text=True, check=True)
+        
+        print("[✔] Blender generation complete!")
+    except subprocess.CalledProcessError as e:
+        print(f"[!!!] Blender crashed. Error log:\n{e.stderr}")
+        return {"success": False, "error": "Blender geometry generation failed."}
+        
+    # Clean up temp files
+    if os.path.exists(img_path): os.remove(img_path)
+    if os.path.exists(temp_json_path): os.remove(temp_json_path)
+
+    return {
+        "success": True,
+        "params": params,
+        "model_url": "http://localhost:8000/output/blender_ring.glb" 
+    }
+
+from fastapi.staticfiles import StaticFiles
+app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)

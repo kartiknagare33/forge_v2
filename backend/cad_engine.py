@@ -3,27 +3,23 @@ import cadquery as cq
 
 class CADCompiler:
     def __init__(self):
-        print("Initializing Advanced 100-Param CAD Engine...")
+        print("Initializing Advanced Multi-Parametric CAD Engine...")
 
     def build_solitaire(self, params: dict):
-        # 1. Core Dimensions (Overrides from Trellis/Base)
         ring_size_mm = float(params.get('ring_diameter_mm', 16.5))
         band_width = float(params.get('band_width_mm', 2.2))
         stone_size = float(params.get('stone_size_mm', 6.5))
         prong_count = int(params.get('prong_count', 4))
         
-        # 2. Multi-View Styles
         band_profile = params.get('inner_profile', 'comfort_fit').lower()
         shoulder_style = params.get('shoulder_style', 'plain').lower()
         stone_cut = params.get('stone_cut', 'round_brilliant').lower()
         gallery_style = params.get('gallery_style', 'open').lower()
         prong_tip = params.get('prong_tip_shape', 'round').lower()
 
-        print(f"Compiling Specs: {stone_cut.upper()} cut, {shoulder_style.upper()} shoulders, {band_profile.upper()} profile")
-
         # --- THE BAND ---
         band_radius = ring_size_mm / 2.0
-        band_thickness = float(params.get('band_thickness_mm', 1.8) or 1.8)
+        band_thickness = float(params.get('band_thickness_mm', 1.8))
         if band_thickness < 1.0: band_thickness = 1.8 
         
         band = cq.Workplane("XZ").circle(band_radius + band_thickness).circle(band_radius).extrude(band_width)
@@ -36,6 +32,7 @@ class CADCompiler:
 
         # --- SHOULDERS & GALLERY ---
         if 'cathedral' in shoulder_style:
+            # Add angled shoulder supports rising to the stone
             support = (cq.Workplane("YZ").workplane(offset=-band_width/2)
                        .move(band_radius, 0).line(0, stone_base_z - band_radius)
                        .line(band_thickness*1.5, -(stone_base_z - band_radius))
@@ -47,59 +44,48 @@ class CADCompiler:
             metal_body = metal_body.union(support).union(support2)
 
         if gallery_style == 'closed':
+            # Solid base beneath the stone
             basket = cq.Workplane("XY").workplane(offset=stone_base_z - 1.0).circle(stone_size * 0.4).extrude(1.0)
             metal_body = metal_body.union(basket)
 
-        # --- EXTENDED STONE CUT LIBRARY ---
+        # --- STONE CUT LIBRARY (FIXED MATH) ---
         p_d = stone_size * 0.45
         c_h = stone_size * 0.15
         g_r = stone_size / 2.0
         
-        if 'princess' in stone_cut or 'square' in stone_cut:
+        if 'princess' in stone_cut:
             stone = (cq.Workplane("XY").workplane(offset=stone_base_z - p_d)
                      .rect(0.1, 0.1).workplane(offset=p_d).rect(stone_size, stone_size)
                      .workplane(offset=c_h).rect(stone_size*0.6, stone_size*0.6).loft())
-                     
-        elif 'emerald' in stone_cut or 'rectangular' in stone_cut:
+        elif 'emerald' in stone_cut:
             l, w = stone_size, stone_size * 0.7
             stone = (cq.Workplane("XY").workplane(offset=stone_base_z - p_d)
                      .rect(0.1, 0.1).workplane(offset=p_d).rect(l, w)
                      .workplane(offset=c_h).rect(l*0.7, w*0.7).loft())
-                     
-        elif 'oval' in stone_cut:
-            l_r, w_r = stone_size / 2.0, (stone_size * 0.7) / 2.0
-            stone = (cq.Workplane("XY").workplane(offset=stone_base_z - p_d)
-                     .ellipse(0.1, 0.1).workplane(offset=p_d).ellipse(l_r, w_r)
-                     .workplane(offset=c_h).ellipse(l_r*0.6, w_r*0.6).loft())
-                     
         else: # Round Brilliant Default
+            # FIX: Lofting polygon to polygon prevents math kernel freezes
             stone = (cq.Workplane("XY").workplane(offset=stone_base_z - p_d)
                      .polygon(16, 0.1).workplane(offset=p_d).polygon(16, g_r * 2)
                      .workplane(offset=c_h).polygon(8, g_r * 2 * 0.53).loft())
 
-        # --- DYNAMIC PRONGS (Using AI Extracted Multi-View Params) ---
-        raw_base = float(params.get('prong_base_width_mm', 0.8) or 0.8)
-        raw_tip = float(params.get('prong_tip_width_mm', 0.5) or 0.5)
-        raw_height = float(params.get('prong_height_mm', p_d + c_h + 0.2) or (p_d + c_h + 0.2))
-        
-        p_base = min(max(raw_base / 2.0, 0.25), 0.5) # Safe radius clamp
-        p_tip = min(max(raw_tip / 2.0, 0.15), 0.35)
-        prong_h = min(raw_height, p_d + c_h + 0.5) # Prevent crazy tall prongs
+        # --- TAPERED PRONGS ---
+        prong_h = p_d + c_h + 0.2
+        p_base = float(params.get('prong_base_width_mm', 0.6))
+        p_tip = float(params.get('prong_tip_width_mm', 0.3))
+        if p_base < 0.2: p_base = 0.6
+        if p_tip < 0.1: p_tip = 0.3
         
         for i in range(prong_count):
-            angle_offset = 45 if (('princess' in stone_cut or 'emerald' in stone_cut) and prong_count == 4) else 0
+            # Rotate prongs 45 deg for princess cut corners
+            angle_offset = 45 if ('princess' in stone_cut and prong_count == 4) else 0
             angle = (360.0 / prong_count) * i + angle_offset
             
-            prong = (cq.Workplane("XY").workplane(offset=stone_base_z - 0.5)
-                     .transformed(rotate=cq.Vector(0, 0, angle))
-                     .center(g_r - (p_base * 0.8), 0)
-                     .circle(p_base)
-                     .workplane(offset=prong_h)
-                     .circle(p_tip)
-                     .loft())
+            prong = (cq.Workplane("XY").workplane(offset=stone_base_z - 0.4)
+                     .transformed(rotate=cq.Vector(0, 0, angle)).center(g_r - 0.15, 0)
+                     .circle(p_base).workplane(offset=prong_h).circle(p_tip).loft())
             
             if prong_tip == 'round':
-                try: prong = prong.faces(">Z").edges().fillet(p_tip * 0.8)
+                try: prong = prong.faces(">Z").edges().fillet(p_tip * 0.4)
                 except: pass
                 
             metal_body = metal_body.union(prong)
@@ -109,7 +95,7 @@ class CADCompiler:
         assembly.add(stone, name="stone_body", color=cq.Color(0.0, 0.5, 1.0, 0.5))
         return assembly
 
-    # Fallbacks for earring/pendant
+    # Fallbacks for earring/pendant to keep routing clean
     def build_earring(self, stone_size=5.0):
         metal_body = cq.Workplane("XY").circle(0.4).extrude(10.0).union(cq.Workplane("XY").workplane(offset=10.0).circle(stone_size*0.3).extrude(0.8))
         stone = cq.Workplane("XY").workplane(offset=10.5).polygon(16, 0.1).workplane(offset=stone_size*0.45).polygon(16, stone_size).workplane(offset=stone_size*0.15).polygon(8, stone_size*0.53).loft()
@@ -128,7 +114,8 @@ class CADCompiler:
 
     def compile_to_glb(self, params: dict, output_path: str):
         jewelry_type = params.get('jewelry_type', 'solitaire').lower()
-        try: stone_size = float(params.get('stone_size_mm', 6.5) or 6.5)
+        
+        try: stone_size = float(params.get('stone_size_mm', 6.5))
         except: stone_size = 6.5
 
         if jewelry_type == 'earring':
@@ -136,8 +123,8 @@ class CADCompiler:
         elif jewelry_type == 'pendant':
             assembly = self.build_pendant(stone_size)
         else:
+            # Hand the ENTIRE parameter dictionary to the solitaire builder
             assembly = self.build_solitaire(params)
             
-        # Tolerance kept at 0.05 so exports take 2 seconds, not 2 hours.
-        assembly.save(output_path, exportType="GLTF", tolerance=0.05, angularTolerance=0.1)
+        assembly.save(output_path, exportType="GLTF", tolerance=0.005, angularTolerance=0.005)
         return output_path
