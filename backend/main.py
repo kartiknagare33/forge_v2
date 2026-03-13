@@ -5,9 +5,10 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from gemini_service import GeminiService
+from view_analyzer import ViewAnalyzer
 from trellis_client import TrellisClient
-from mesh_analyzer  import MeshAnalyzer
-from cad_engine     import CADCompiler
+from mesh_analyzer import MeshAnalyzer
+from cad_engine import CADCompiler
 
 app = FastAPI(title="FORGE API — Parametric Compiler")
 app.add_middleware(
@@ -16,116 +17,112 @@ app.add_middleware(
     allow_methods=["*"], allow_headers=["*"],
 )
 
-BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "output"))
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-gemini   = GeminiService()
-trellis  = TrellisClient()
-analyzer = MeshAnalyzer()
+print("Initializing full backend pipeline...")
+gemini = GeminiService()
+# We pass the same Gemini model instance into ViewAnalyzer to save memory
+view_analyzer = ViewAnalyzer(model=gemini.model)
+trellis = TrellisClient()
+mesh_analyzer = MeshAnalyzer()
 compiler = CADCompiler()
 
-MOCK_PARAMS = {
-    "jewelry_type":     "solitaire",
-    "stone_cut":        "round_brilliant",
-    "setting_type":     "prong",
-    "metal":            "rose_gold",
-    "stone_material":   "diamond",
-    "ring_diameter_mm": 17.2,
-    "band_width_mm":    2.2,
-    "stone_size_mm":    6.5,
-    "prong_count":      4,
-    "band_profile":     "comfort",
-}
-
-
 def calculate_price(params: dict) -> int:
-    stone_prices = {"diamond":3500,"ruby":1200,"sapphire":1000,"emerald":1100,"amethyst":300}
-    metal_prices = {"yellow_gold":900,"white_gold":950,"rose_gold":850,"platinum":1400}
-    return 500 + stone_prices.get(params.get("stone_material","diamond"),500) \
-               + metal_prices.get(params.get("metal","yellow_gold"),900)
-
-
-@app.get("/health")
-async def health():
-    return {"status": "ok", "message": "FORGE Parametric Compiler is live"}
-
+    stone_prices = {"diamond":3500, "ruby":1200, "sapphire":1000, "emerald":1100, "amethyst":300}
+    metal_prices = {"yellow_gold":900, "white_gold":950, "rose_gold":850, "platinum":1400}
+    
+    base_cost = 500
+    stone_cost = stone_prices.get(params.get("stone_material", "diamond"), 500)
+    metal_cost = metal_prices.get(params.get("metal", "yellow_gold"), 900)
+    return base_cost + stone_cost + metal_cost
 
 @app.post("/process")
 async def process_jewelry(file: UploadFile = File(...)):
-    print(f"\n{'='*45}")
-    print(f"FORGE COMPILATION STARTED: {file.filename}")
-    print(f"{'='*45}")
+    print(f"\n{'='*50}")
+    print(f"FORGE MULTI-VIEW COMPILATION STARTED: {file.filename}")
+    print(f"{'='*50}")
 
-    # 1. Save upload
     temp_path = os.path.join(OUTPUT_DIR, file.filename)
     with open(temp_path, "wb") as buf:
         buf.write(await file.read())
 
-    # 2. Quick Gemini pass — visual only, no measurements yet
-    is_mock   = False
-    mesh_data = None
-    try:
-        params = gemini.analyze_jewelry(temp_path)
-    except Exception as e:
-        print(f"[!] Gemini pass 1 failed ({e}) — using mock params")
-        params  = MOCK_PARAMS.copy()
-        is_mock = True
+    # This will hold ALL 40-100 parameters we extract
+    master_params = {}
 
-    # 3. TRELLIS generates rough mesh for measurement
+    # --- STEP 1: Base Visual Pass (Metal, Gem, Cut) ---
+    print("\n[1/5] Running Base Visual Extraction...")
+    try:
+        base_params = gemini.analyze_jewelry(temp_path)
+        master_params.update(base_params)
+    except Exception as e:
+        print(f"[!] Base pass failed: {e}")
+
+    # --- STEP 2: Multi-View Targeted Extraction (Prongs, Shoulders, Profiles) ---
+    print("\n[2/5] Running Targeted Multi-View Extraction...")
+    try:
+        view_params = view_analyzer.analyze_all_views(temp_path)
+        master_params.update(view_params)
+    except Exception as e:
+        print(f"[!] Multi-view extraction failed: {e}")
+
+    # --- STEP 3: Metrology Pass (TRELLIS + trimesh for real dimensions) ---
+    print("\n[3/5] Running 3D Metrology Pass...")
     rough_glb = None
     try:
-        print("Running TRELLIS for mesh measurement...")
         rough_glb = trellis.generate_glb(temp_path, OUTPUT_DIR)
     except Exception as e:
-        print(f"[!] TRELLIS failed ({e}) — skipping mesh analysis")
+        print(f"[!] TRELLIS failed: {e}")
 
-    # 4. Extract real measurements from TRELLIS mesh
     if rough_glb and os.path.exists(rough_glb):
         try:
-            mesh_data = analyzer.analyze(rough_glb)
-            print(f"Mesh measurements: {mesh_data}")
+            mesh_data = mesh_analyzer.analyze(rough_glb)
+            if mesh_data:
+                # Real dimensions override AI visual estimates
+                master_params["ring_diameter_mm"] = mesh_data.get("band_diameter_mm", 17.2)
+                master_params["band_width_mm"] = mesh_data.get("band_width_mm", 2.2)
+                master_params["stone_size_mm"] = mesh_data.get("stone_diameter_mm", 6.5)
+                master_params["overall_height_mm"] = mesh_data.get("overall_height_mm", 25.0)
         except Exception as e:
-            print(f"[!] Mesh analysis failed ({e})")
+            print(f"[!] Mesh analysis failed: {e}")
 
-    # 5. Second Gemini pass — now with real measurements
-    if mesh_data and not is_mock:
-        try:
-            params = gemini.analyze_jewelry(temp_path, mesh_data=mesh_data)
-        except Exception as e:
-            print(f"[!] Gemini pass 2 failed ({e}) — keeping pass 1 params")
+    print("\n[4/5] FINAL PARAMETER MERGE COMPLETE")
+    print(f"Total constraints extracted: {len(master_params)}")
 
-    # 6. CadQuery builds clean final model
+    # --- STEP 4: CadQuery Compilation ---
+    print("\n[5/5] Compiling CAD Geometry...")
     try:
         glb_path = os.path.join(OUTPUT_DIR, "compiled_model.glb")
-        compiler.compile_to_glb(params, glb_path)
+        
+        # We pass the massive master_params dictionary to the engine
+        compiler.compile_to_glb(master_params, glb_path)
 
         with open(glb_path, "rb") as f:
             glb_b64 = base64.b64encode(f.read()).decode("utf-8")
 
         spec = {
-            "stone_cut":            params.get("stone_cut","round_brilliant"),
-            "stone_size_mm":        params.get("stone_size_mm", 6.5),
-            "carat_estimate":       round((params.get("stone_size_mm",6.5)/6.5)**3, 2),
-            "metal":                params.get("metal","yellow_gold"),
-            "prong_count":          params.get("prong_count", 4),
-            "estimated_price_usd":  calculate_price(params),
+            "stone_cut": master_params.get("stone_cut", "round_brilliant"),
+            "stone_size_mm": master_params.get("stone_size_mm", 6.5),
+            "carat_estimate": round((master_params.get("stone_size_mm", 6.5) / 6.5)**3, 2),
+            "metal": master_params.get("metal", "yellow_gold"),
+            "prong_count": master_params.get("prong_count", 4),
+            "total_parameters_used": len(master_params),
+            "estimated_price_usd": calculate_price(master_params),
         }
 
         print("[✔] COMPILATION COMPLETE")
         return {
-            "success":  True,
-            "glb_b64":  glb_b64,
-            "params":   params,
-            "spec":     spec,
-            "is_mock":  is_mock,
+            "success": True,
+            "glb_b64": glb_b64,
+            "params": master_params,
+            "spec": spec
         }
 
     except Exception as e:
         print(f"[!!!] CAD COMPILER ERROR: {e}")
         import traceback; traceback.print_exc()
         return {"success": False, "error": str(e)}
-
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
