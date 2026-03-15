@@ -3,17 +3,14 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment";
-
-// Removed .js extensions to prevent bundler crashes
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass";
-
 import { setupMultiViewCameras, applySAMeshMasks } from "../SAMeshLifter";
 
 const METALS = {
   yellow_gold: { color: 0xffd700 },
-  white_gold: { color: 0xf0f0f0 },
+  white_gold: { color: 0xf8f8f8 },
   rose_gold: { color: 0xe8a090 },
   platinum: { color: 0xe5e4e2 },
 };
@@ -32,7 +29,6 @@ export default function Viewer({ glbB64, params, loading }) {
   const mountRef = useRef(null);
   const stateRef = useRef({});
   const meshRef = useRef(null);
-  const procGroupRef = useRef(null);
   const segmentationDone = useRef(false);
   const paramsRef = useRef(params);
   const [isSegmenting, setIsSegmenting] = useState(false);
@@ -47,8 +43,8 @@ export default function Viewer({ glbB64, params, loading }) {
     const H = mountRef.current.clientHeight;
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(45, W / H, 0.1, 100);
-    camera.position.set(0, 2, 5);
+    const camera = new THREE.PerspectiveCamera(40, W / H, 0.1, 100);
+    camera.position.set(0, 1.5, 4.5);
 
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
@@ -58,13 +54,14 @@ export default function Viewer({ glbB64, params, loading }) {
     renderer.setSize(W, H);
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.2;
+    renderer.toneMappingExposure = 1.1;
     mountRef.current.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
     controls.autoRotate = true;
-    controls.autoRotateSpeed = 2.0;
+    controls.autoRotateSpeed = 1.5;
 
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
     scene.environment = pmremGenerator.fromScene(
@@ -72,16 +69,16 @@ export default function Viewer({ glbB64, params, loading }) {
       0.04,
     ).texture;
 
-    const pointLight = new THREE.PointLight(0xffffff, 2.5, 10);
+    const pointLight = new THREE.PointLight(0xffffff, 1.2, 10);
     scene.add(pointLight);
-    scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+    scene.add(new THREE.AmbientLight(0xffffff, 0.4));
 
     const renderScene = new RenderPass(scene, camera);
     const bloomPass = new UnrealBloomPass(
       new THREE.Vector2(W, H),
-      0.3,
-      0.2,
-      0.9,
+      0.35,
+      0.1,
+      0.85,
     );
     const composer = new EffectComposer(renderer);
     composer.addPass(renderScene);
@@ -92,12 +89,10 @@ export default function Viewer({ glbB64, params, loading }) {
     const animate = () => {
       requestAnimationFrame(animate);
       controls.update();
-
-      const time = Date.now() * 0.002;
-      pointLight.position.x = Math.sin(time) * 3;
-      pointLight.position.z = Math.cos(time) * 3;
-      pointLight.position.y = 2;
-
+      const time = Date.now() * 0.0015;
+      pointLight.position.x = Math.sin(time) * 2;
+      pointLight.position.z = Math.cos(time) * 2;
+      pointLight.position.y = 1.5;
       composer.render();
     };
     animate();
@@ -106,9 +101,8 @@ export default function Viewer({ glbB64, params, loading }) {
       renderer.dispose();
       composer.dispose();
       pmremGenerator.dispose();
-      if (mountRef.current && renderer.domElement) {
+      if (mountRef.current && renderer.domElement)
         mountRef.current.removeChild(renderer.domElement);
-      }
     };
   }, []);
 
@@ -125,62 +119,11 @@ export default function Viewer({ glbB64, params, loading }) {
       const mProps = METALS[p.metal] || METALS.yellow_gold;
       metalMat.color.setHex(mProps.color);
       metalMat.roughness = p.finishRoughness || 0.12;
-      metalMat.needsUpdate = true;
 
       const sProps = STONES[p.primary_stone] || STONES.diamond;
       stoneMat.color.setHex(sProps.color);
       stoneMat.ior = sProps.ior;
-      stoneMat.envMapIntensity = p.gemBrilliance || 2.0;
-      stoneMat.needsUpdate = true;
-    }
-
-    const { scene } = stateRef.current;
-    if (procGroupRef.current && scene) {
-      scene.remove(procGroupRef.current);
-      procGroupRef.current = null;
-    }
-
-    const procGroup = new THREE.Group();
-    const box = new THREE.Box3().setFromObject(meshRef.current);
-    const size = box.getSize(new THREE.Vector3());
-
-    const mProps = METALS[p.metal] || METALS.yellow_gold;
-    const procMetalMat = new THREE.MeshStandardMaterial({
-      color: mProps.color,
-      roughness: p.finishRoughness || 0.12,
-      metalness: 0.95,
-    });
-
-    if (p.jewelry_type === "pendant") {
-      const torusGeom = new THREE.TorusGeometry(
-        size.x * 0.15,
-        size.x * 0.03,
-        16,
-        32,
-      );
-      const bail = new THREE.Mesh(torusGeom, procMetalMat);
-      bail.position.set(0, box.max.y + size.x * 0.1, 0);
-      procGroup.add(bail);
-    } else if (p.jewelry_type === "earrings") {
-      const earring2 = meshRef.current.clone();
-      earring2.position.set(size.x * 1.5, 0, 0);
-      meshRef.current.position.set(-size.x * 0.75, 0, 0);
-
-      const hookGeom = new THREE.CylinderGeometry(0.01, 0.01, size.y * 0.4, 8);
-      const hook1 = new THREE.Mesh(hookGeom, procMetalMat);
-      hook1.position.set(-size.x * 0.75, box.max.y + size.y * 0.2, 0);
-
-      const hook2 = new THREE.Mesh(hookGeom, procMetalMat);
-      hook2.position.set(size.x * 1.5, box.max.y + size.y * 0.2, 0);
-
-      procGroup.add(earring2, hook1, hook2);
-    } else {
-      meshRef.current.position.set(0, 0, 0);
-    }
-
-    if (scene) {
-      scene.add(procGroup);
-      procGroupRef.current = procGroup;
+      stoneMat.envMapIntensity = p.gemBrilliance || 2.5;
     }
   };
 
@@ -191,18 +134,15 @@ export default function Viewer({ glbB64, params, loading }) {
     params?.primary_stone,
     params?.finishRoughness,
     params?.gemBrilliance,
-    params?.jewelry_type,
   ]);
 
   useEffect(() => {
     if (!glbB64 || !stateRef.current.scene) return;
-
     segmentationDone.current = false;
     const { scene, renderer } = stateRef.current;
 
     const oldModel = scene.getObjectByName("jewelry_model");
     if (oldModel) scene.remove(oldModel);
-    if (procGroupRef.current) scene.remove(procGroupRef.current);
 
     const loader = new GLTFLoader();
     const dataUri = glbB64.startsWith("data:")
@@ -220,12 +160,7 @@ export default function Viewer({ glbB64, params, loading }) {
           if (c.geometry.attributes.color) c.geometry.deleteAttribute("color");
           if (c.geometry.attributes.uv) c.geometry.deleteAttribute("uv");
           c.geometry.computeVertexNormals();
-          c.material = new THREE.MeshStandardMaterial({
-            color: 0xcccccc,
-            roughness: 0.3,
-            metalness: 0.8,
-            vertexColors: false,
-          });
+          c.material = new THREE.MeshNormalMaterial();
         }
       });
 
@@ -294,23 +229,24 @@ export default function Viewer({ glbB64, params, loading }) {
 
           const metalMat = new THREE.MeshPhysicalMaterial({
             color: mProps.color,
-            metalness: 0.95,
-            roughness: p.finishRoughness || 0.12,
+            metalness: 1.0,
+            roughness: p.finishRoughness || 0.1,
             clearcoat: 1.0,
-            clearcoatRoughness: 0.1,
-            envMapIntensity: 1.8,
+            clearcoatRoughness: 0.05,
+            envMapIntensity: 1.5,
             vertexColors: false,
           });
 
           const stoneMat = new THREE.MeshPhysicalMaterial({
             color: sProps.color,
-            metalness: 0.1,
-            roughness: 0.03,
-            transmission: 0.98,
+            metalness: 0.0,
+            roughness: 0.0,
+            transmission: 1.0,
             ior: sProps.ior,
-            thickness: 2.0,
+            thickness: 2.5,
+            dispersion: 1.5,
             transparent: true,
-            envMapIntensity: p.gemBrilliance || 2.0,
+            envMapIntensity: p.gemBrilliance || 2.5,
             vertexColors: false,
           });
 
@@ -371,7 +307,7 @@ export default function Viewer({ glbB64, params, loading }) {
             borderRadius: 4,
           }}
         >
-          [AI] Running SAMesh Semantic Geometry Lift...
+          [AI] SAMesh Lift: 6-Axis Intersection Active...
         </div>
       )}
       <div ref={mountRef} style={{ width: "100%", height: "100%" }} />

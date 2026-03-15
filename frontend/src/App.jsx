@@ -43,13 +43,13 @@ const PRICING = {
 
 const DEFAULT_PARAMS = {
   jewelry_type: "solitaire",
-  metal: "yellow_gold",
+  metal: "rose_gold",
   primary_stone: "diamond",
   has_secondary_stones: false,
   secondary_stone: "none",
   metal_volume_cm3: 1.2,
   finishRoughness: 0.12,
-  gemBrilliance: 2.0,
+  gemBrilliance: 2.5,
 };
 
 export default function App() {
@@ -60,7 +60,6 @@ export default function App() {
     "Upload a design to launch the compiler.",
   );
 
-  // 🚨 FIXED: Added the missing useRef
   const fileRef = useRef(null);
 
   const [details, setDetails] = useState({
@@ -123,7 +122,7 @@ export default function App() {
         ...data.params,
         metal_volume_cm3: safeVolume,
         finishRoughness: 0.12,
-        gemBrilliance: 2.0,
+        gemBrilliance: 2.5,
       }));
       setStatus(
         `✅ Compiled ${(data.params?.jewelry_type || "solitaire").replace("_", " ")} (Volume: ${safeVolume} cm³)`,
@@ -196,6 +195,21 @@ export default function App() {
         action: () => set("primary_stone", "diamond"),
       });
     }
+    if (["white_gold", "yellow_gold", "rose_gold"].includes(params.metal)) {
+      const platPrice = PRICING.metal["platinum"];
+      const cost = Math.round(
+        (details?.weightGrams || 10) * Math.abs(currentMetalPrice - platPrice),
+      );
+      if (platPrice > currentMetalPrice) {
+        advice.push({
+          type: "upgrade",
+          title: "Upgrade to Platinum",
+          desc: "Hypoallergenic, ultra-durable premium metal.",
+          diff: cost,
+          action: () => set("metal", "platinum"),
+        });
+      }
+    }
     return advice;
   }
 
@@ -227,156 +241,172 @@ export default function App() {
           />
           <p style={S.status}>{status}</p>
 
-          <div style={{ marginTop: 20 }}>
-            <div style={S.flexBetween}>
-              <h2 style={S.sec}>Materials</h2>
-              <span style={S.typeBadge}>
-                {(params?.jewelry_type || "solitaire")
-                  .replace("_", " ")
-                  .toUpperCase()}
-              </span>
-            </div>
-
-            <div style={S.grid2}>
-              {[
-                ["yellow_gold", "Yellow Gold"],
-                ["white_gold", "White Gold"],
-                ["rose_gold", "Rose Gold"],
-                ["platinum", "Platinum"],
-              ].map(([val, label]) => (
-                <button
-                  key={val}
-                  onClick={() => set("metal", val)}
-                  style={{
-                    ...S.chip,
-                    ...(params?.metal === val ? S.chipOn : {}),
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            <div style={S.grid3}>
-              {[
-                ["diamond", "Diamond"],
-                ["moissanite", "Moissanite"],
-                ["ruby", "Ruby"],
-                ["sapphire", "Sapphire"],
-                ["emerald", "Emerald"],
-                ["amethyst", "Amethyst"],
-              ].map(([val, label]) => (
-                <button
-                  key={val}
-                  onClick={() => set("primary_stone", val)}
-                  style={{
-                    ...S.chip,
-                    ...(params?.primary_stone === val ? S.chipOn : {}),
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            <h2 style={{ ...S.sec, marginTop: 24 }}>Manufacturing Breakdown</h2>
-            <div style={S.breakdownCard}>
-              <div style={S.bRow}>
-                <span>Metal ({details?.weightGrams || 0}g)</span>{" "}
-                <span>₹{(details?.metalCost || 0).toLocaleString()}</span>
-              </div>
-              <div style={S.bRow}>
-                <span>Center Stone ({details?.carat || 0}ct)</span>{" "}
-                <span>₹{(details?.mainStoneCost || 0).toLocaleString()}</span>
-              </div>
-              <div style={S.bRow}>
-                <span>Labor & Making</span>{" "}
-                <span>₹{(details?.labor || 0).toLocaleString()}</span>
-              </div>
-              <div style={{ ...S.bRow, ...S.bTotal }}>
-                <span>Total Est. Retail</span>{" "}
-                <span style={{ color: "#10b981" }}>
-                  ₹{(details?.total || 0).toLocaleString()}
+          {glbB64 && (
+            <div style={{ marginTop: 20 }}>
+              <div style={S.flexBetween}>
+                <h2 style={S.sec}>Materials</h2>
+                <span style={S.typeBadge}>
+                  {(params?.jewelry_type || "solitaire")
+                    .replace("_", " ")
+                    .toUpperCase()}
                 </span>
               </div>
-            </div>
 
-            {smartAdvice.length > 0 && (
-              <>
-                <h2 style={{ ...S.sec, marginTop: 24 }}>Smart Advisor</h2>
-                <div style={S.adviceContainer}>
-                  {smartAdvice.map((adv, i) => (
-                    <div
-                      key={i}
-                      style={
-                        adv.type === "save"
-                          ? S.adviceCardSave
-                          : S.adviceCardUpgrade
-                      }
-                    >
-                      <div style={S.flexBetween}>
-                        <span style={S.adviceTitle}>{adv.title}</span>
-                        <span
-                          style={
-                            adv.type === "save"
-                              ? S.adviceDiffSave
-                              : S.adviceDiffUpgrade
-                          }
-                        >
-                          {adv.type === "save" ? "-" : "+"}₹
-                          {(Math.abs(adv.diff) || 0).toLocaleString()}
-                        </span>
-                      </div>
-                      <p style={S.adviceDesc}>{adv.desc}</p>
-                      <button
-                        onClick={adv.action}
+              <div style={S.grid2}>
+                {[
+                  ["yellow_gold", "Yellow Gold"],
+                  ["white_gold", "White Gold"],
+                  ["rose_gold", "Rose Gold"],
+                  ["platinum", "Platinum"],
+                ].map(([val, label]) => (
+                  <button
+                    key={val}
+                    onClick={() => set("metal", val)}
+                    style={{
+                      ...S.chip,
+                      ...(params?.metal === val ? S.chipOn : {}),
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              <div style={S.grid3}>
+                {[
+                  ["diamond", "Diamond"],
+                  ["moissanite", "Moissanite"],
+                  ["ruby", "Ruby"],
+                  ["sapphire", "Sapphire"],
+                  ["emerald", "Emerald"],
+                  ["amethyst", "Amethyst"],
+                ].map(([val, label]) => (
+                  <button
+                    key={val}
+                    onClick={() => set("primary_stone", val)}
+                    style={{
+                      ...S.chip,
+                      ...(params?.primary_stone === val ? S.chipOn : {}),
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              <h2 style={{ ...S.sec, marginTop: 24 }}>
+                Manufacturing Breakdown
+              </h2>
+              <div style={S.breakdownCard}>
+                <div style={S.bRow}>
+                  <span>Metal ({details?.weightGrams || 0}g)</span>{" "}
+                  <span>₹{(details?.metalCost || 0).toLocaleString()}</span>
+                </div>
+                <div style={S.bRow}>
+                  <span>Center Stone ({details?.carat || 0}ct)</span>{" "}
+                  <span>₹{(details?.mainStoneCost || 0).toLocaleString()}</span>
+                </div>
+                <div style={S.bRow}>
+                  <span>Labor & Making</span>{" "}
+                  <span>₹{(details?.labor || 0).toLocaleString()}</span>
+                </div>
+                <div style={{ ...S.bRow, ...S.bTotal }}>
+                  <span>Total Est. Retail</span>{" "}
+                  <span style={{ color: "#10b981" }}>
+                    ₹{(details?.total || 0).toLocaleString()}
+                  </span>
+                </div>
+              </div>
+
+              {smartAdvice.length > 0 && (
+                <>
+                  <h2 style={{ ...S.sec, marginTop: 24 }}>Smart Advisor</h2>
+                  <div style={S.adviceContainer}>
+                    {smartAdvice.map((adv, i) => (
+                      <div
+                        key={i}
                         style={
                           adv.type === "save"
-                            ? S.adviceBtnSave
-                            : S.adviceBtnUpgrade
+                            ? S.adviceCardSave
+                            : S.adviceCardUpgrade
                         }
                       >
-                        Apply Optimization
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
+                        <div style={S.flexBetween}>
+                          <span style={S.adviceTitle}>{adv.title}</span>
+                          <span
+                            style={
+                              adv.type === "save"
+                                ? S.adviceDiffSave
+                                : S.adviceDiffUpgrade
+                            }
+                          >
+                            {adv.type === "save" ? "-" : "+"}₹
+                            {(Math.abs(adv.diff) || 0).toLocaleString()}
+                          </span>
+                        </div>
+                        <p style={S.adviceDesc}>{adv.desc}</p>
+                        <button
+                          onClick={adv.action}
+                          style={
+                            adv.type === "save"
+                              ? S.adviceBtnSave
+                              : S.adviceBtnUpgrade
+                          }
+                        >
+                          Apply Optimization
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
 
-            <h2 style={{ ...S.sec, marginTop: 24 }}>Parametric Modifiers</h2>
-            <p style={S.lbl}>Metal Finish (Roughness)</p>
-            <input
-              type="range"
-              min="0"
-              max="0.5"
-              step="0.01"
-              value={params?.finishRoughness || 0.12}
-              onChange={(e) =>
-                set("finishRoughness", parseFloat(e.target.value))
-              }
-              style={S.slider}
-            />
-            <div style={S.flexBetween}>
-              <span style={S.smallText}>Polished</span>
-              <span style={S.smallText}>Matte</span>
+              <h2 style={{ ...S.sec, marginTop: 24 }}>Parametric Modifiers</h2>
+              <p style={S.lbl}>Metal Finish (Roughness)</p>
+              <input
+                type="range"
+                min="0"
+                max="0.5"
+                step="0.01"
+                value={params?.finishRoughness || 0.12}
+                onChange={(e) =>
+                  set("finishRoughness", parseFloat(e.target.value))
+                }
+                style={S.slider}
+              />
+              <div style={S.flexBetween}>
+                <span style={S.smallText}>Polished</span>
+                <span style={S.smallText}>Matte</span>
+              </div>
+
+              <p style={S.lbl}>Gem Brilliance (HDRI Impact)</p>
+              <input
+                type="range"
+                min="0.5"
+                max="4.0"
+                step="0.1"
+                value={params?.gemBrilliance || 2.5}
+                onChange={(e) =>
+                  set("gemBrilliance", parseFloat(e.target.value))
+                }
+                style={S.slider}
+              />
             </div>
-
-            <p style={S.lbl}>Gem Brilliance (HDRI Impact)</p>
-            <input
-              type="range"
-              min="0.5"
-              max="4.0"
-              step="0.1"
-              value={params?.gemBrilliance || 2.0}
-              onChange={(e) => set("gemBrilliance", parseFloat(e.target.value))}
-              style={S.slider}
-            />
-          </div>
+          )}
         </div>
 
         <div style={S.right}>
-          <Viewer glbB64={glbB64} params={params} loading={loading} />
+          {glbB64 ? (
+            <Viewer glbB64={glbB64} params={params} loading={loading} />
+          ) : (
+            <div style={S.placeholderBox}>
+              <div style={S.placeholderText}>
+                {loading
+                  ? "⏳ Extracting Spatial Parameters..."
+                  : "[ SYSTEM IDLE : AWAITING DESIGN UPLOAD ]"}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -594,5 +624,18 @@ const S = {
     fontSize: 11,
     fontWeight: "bold",
     cursor: "pointer",
+  },
+  placeholderBox: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    height: "100%",
+    width: "100%",
+  },
+  placeholderText: {
+    color: "#444",
+    fontFamily: "'JetBrains Mono', monospace",
+    letterSpacing: 2,
+    fontSize: 14,
   },
 };

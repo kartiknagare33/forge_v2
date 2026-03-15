@@ -1,117 +1,164 @@
 import * as THREE from "three";
 
-export function setupMultiViewCameras(mesh, width = 512, height = 512) {
+export function setupMultiViewCameras(mesh, width, height) {
   const box = new THREE.Box3().setFromObject(mesh);
-  const center = new THREE.Vector3();
-  box.getCenter(center);
-  const size = new THREE.Vector3();
-  box.getSize(size);
-
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z);
-  const distance = maxDim * 2.0;
 
+  const cams = [];
   const positions = [
-    new THREE.Vector3(center.x, center.y, center.z + distance),
-    new THREE.Vector3(center.x, center.y, center.z - distance),
-    new THREE.Vector3(center.x + distance, center.y, center.z),
-    new THREE.Vector3(center.x - distance, center.y, center.z),
+    { pos: [0, 0, maxDim], up: [0, 1, 0] }, // 0: Front
+    { pos: [0, 0, -maxDim], up: [0, 1, 0] }, // 1: Back
+    { pos: [maxDim, 0, 0], up: [0, 1, 0] }, // 2: Right
+    { pos: [-maxDim, 0, 0], up: [0, 1, 0] }, // 3: Left
+    { pos: [0, maxDim, 0], up: [0, 0, -1] }, // 4: Top
+    { pos: [0, -maxDim, 0], up: [0, 0, 1] }, // 5: Bottom
   ];
 
-  return positions.map((pos) => {
+  positions.forEach((config) => {
     const cam = new THREE.OrthographicCamera(
-      -maxDim,
-      maxDim,
-      maxDim,
-      -maxDim,
+      -maxDim / 2,
+      maxDim / 2,
+      maxDim / 2,
+      -maxDim / 2,
       0.1,
-      distance * 3,
+      maxDim * 2,
     );
-    cam.position.copy(pos);
+    cam.position.set(
+      center.x + config.pos[0],
+      center.y + config.pos[1],
+      center.z + config.pos[2],
+    );
+    cam.up.set(...config.up);
     cam.lookAt(center);
-    cam.updateMatrixWorld();
-    return cam;
+    cam.updateProjectionMatrix();
+    cams.push(cam);
   });
+  return cams;
 }
 
 export function applySAMeshMasks(
   mesh,
   cameras,
-  maskCanvases,
+  maskContexts,
   metalMat,
   stoneMat,
 ) {
-  const geometry = mesh.geometry;
-  if (!geometry.attributes.position) return;
+  const geometry = mesh.geometry.toNonIndexed();
+  const positions = geometry.attributes.position.array;
+  const normals = geometry.attributes.normal
+    ? geometry.attributes.normal.array
+    : null;
 
-  // Clean baked-in TRELLIS textures
-  if (geometry.attributes.color) geometry.deleteAttribute("color");
-  if (geometry.attributes.uv) geometry.deleteAttribute("uv");
+  const metalPositions = [];
+  const metalNormals = [];
+  const stonePositions = [];
+  const stoneNormals = [];
 
-  const positions = geometry.attributes.position;
-  const vertexCount = positions.count;
-  const vertexVotes = new Float32Array(vertexCount).fill(0);
-  const vec3 = new THREE.Vector3();
+  mesh.updateMatrixWorld();
+  const matrixWorld = mesh.matrixWorld;
 
-  // Raycast logic
-  for (let i = 0; i < vertexCount; i++) {
-    vec3.fromBufferAttribute(positions, i);
-    vec3.applyMatrix4(mesh.matrixWorld);
+  const box = new THREE.Box3().setFromObject(mesh);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const height = size.y;
 
-    for (let c = 0; c < cameras.length; c++) {
-      const camera = cameras[c];
-      const mask = maskCanvases[c];
-      if (!mask) continue;
+  // 1. VERTICAL LIMIT: Stone must be in the top 20%
+  const strictMetalLineY = box.max.y - height * 0.2;
 
-      const projected = vec3.clone().project(camera);
-      const x = Math.round(((projected.x + 1) / 2) * 512);
-      const y = Math.round(((-projected.y + 1) / 2) * 512);
+  // 2. HORIZONTAL LIMIT (NEW): Stone must be in the exact center column.
+  // The gemstone is never wider than ~25% of the total ring width.
+  const maxStoneRadius = Math.max(size.x, size.z) * 0.25;
 
-      if (x < 0 || x >= 512 || y < 0 || y >= 512) continue;
+  for (let i = 0; i < positions.length; i += 9) {
+    const cx = (positions[i] + positions[i + 3] + positions[i + 6]) / 3;
+    const cy = (positions[i + 1] + positions[i + 4] + positions[i + 7]) / 3;
+    const cz = (positions[i + 2] + positions[i + 5] + positions[i + 8]) / 3;
+    const centroid = new THREE.Vector3(cx, cy, cz);
 
-      const pixelIndex = (y * 512 + x) * 4;
-      const isStone = mask.data[pixelIndex] > 128;
+    centroid.applyMatrix4(matrixWorld);
 
-      if (isStone) vertexVotes[i] += 1;
-      else vertexVotes[i] -= 1;
+    // Calculate how far this triangle is from the exact center X/Z column
+    const distFromCenter = Math.sqrt(
+      Math.pow(centroid.x - center.x, 2) + Math.pow(centroid.z - center.z, 2),
+    );
+
+    let sideVote = false;
+    let topVote = false;
+
+    cameras.forEach((cam, idx) => {
+      const ctx = maskContexts[idx];
+      if (!ctx) return;
+      const projected = centroid.clone().project(cam);
+      if (
+        projected.x >= -1 &&
+        projected.x <= 1 &&
+        projected.y >= -1 &&
+        projected.y <= 1
+      ) {
+        const px = Math.floor(((projected.x + 1) / 2) * 512);
+        const py = Math.floor(((-projected.y + 1) / 2) * 512);
+        const pixelIndex = (py * 512 + px) * 4;
+        if (ctx.data[pixelIndex] > 128) {
+          if (idx < 4) sideVote = true;
+          if (idx === 4) topVote = true;
+        }
+      }
+    });
+
+    let isStone = false;
+
+    // --- THE ULTIMATE FAIL-SAFE ---
+    // If it is below the Y-line OR outside the Center Column, it is FORCED to be metal.
+    // This physically prevents the shoulders of the ring from turning to glass.
+    if (centroid.y < strictMetalLineY || distFromCenter > maxStoneRadius) {
+      isStone = false;
+    } else {
+      // It is high up AND in the center. We let the AI mask confirm it.
+      // Or if it's at the very, very top tip (top 8%), force it to stone.
+      const isVeryTop = centroid.y > box.max.y - height * 0.08;
+      isStone = (sideVote && topVote) || isVeryTop;
+    }
+
+    for (let j = 0; j < 9; j++) {
+      if (isStone) {
+        stonePositions.push(positions[i + j]);
+        if (normals) stoneNormals.push(normals[i + j]);
+      } else {
+        metalPositions.push(positions[i + j]);
+        if (normals) metalNormals.push(normals[i + j]);
+      }
     }
   }
 
-  const metalIndices = [];
-  const stoneIndices = [];
-
-  if (geometry.index) {
-    const indices = geometry.index.array;
-    for (let i = 0; i < indices.length; i += 3) {
-      if (vertexVotes[indices[i]] > 0) {
-        stoneIndices.push(indices[i], indices[i + 1], indices[i + 2]);
-      } else {
-        metalIndices.push(indices[i], indices[i + 1], indices[i + 2]);
-      }
-    }
-  } else {
-    for (let i = 0; i < vertexCount; i += 3) {
-      if (vertexVotes[i] > 0) {
-        stoneIndices.push(i, i + 1, i + 2);
-      } else {
-        metalIndices.push(i, i + 1, i + 2);
-      }
-    }
-  }
-
-  // 🚨 CRITICAL FIX: Safe memory allocation.
-  // Javascript array spreads WILL crash on massive AI generated meshes.
-  const newIndicesArray = new Uint32Array(
-    metalIndices.length + stoneIndices.length,
+  const newPositions = new Float32Array(
+    metalPositions.length + stonePositions.length,
   );
-  newIndicesArray.set(metalIndices, 0);
-  newIndicesArray.set(stoneIndices, metalIndices.length);
+  newPositions.set(metalPositions, 0);
+  newPositions.set(stonePositions, metalPositions.length);
 
-  geometry.setIndex(new THREE.BufferAttribute(newIndicesArray, 1));
-  geometry.computeVertexNormals();
+  const newGeometry = new THREE.BufferGeometry();
+  newGeometry.setAttribute(
+    "position",
+    new THREE.BufferAttribute(newPositions, 3),
+  );
 
-  geometry.clearGroups();
-  geometry.addGroup(0, metalIndices.length, 0);
-  geometry.addGroup(metalIndices.length, stoneIndices.length, 1);
+  if (normals) {
+    const newNormals = new Float32Array(
+      metalNormals.length + stoneNormals.length,
+    );
+    newNormals.set(metalNormals, 0);
+    newNormals.set(stoneNormals, metalNormals.length);
+    newGeometry.setAttribute(
+      "normal",
+      new THREE.BufferAttribute(newNormals, 3),
+    );
+  }
 
+  newGeometry.addGroup(0, metalPositions.length / 3, 0);
+  newGeometry.addGroup(metalPositions.length / 3, stonePositions.length / 3, 1);
+
+  mesh.geometry = newGeometry;
   mesh.material = [metalMat, stoneMat];
 }

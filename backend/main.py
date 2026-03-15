@@ -1,101 +1,128 @@
-import os, json, base64
-from fastapi import FastAPI, UploadFile, File
-from pydantic import BaseModel
+import os, json, base64, tempfile, traceback, io, shutil
+import trimesh
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from dotenv import load_dotenv
+from PIL import Image, ImageDraw
+import uvicorn
 from google import genai
 from google.genai import types
-from dotenv import load_dotenv
-from gradio_client import Client, handle_file
-import uvicorn
 
 load_dotenv()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-# The public Grounded-SAM2 space for zero-shot text-to-mask
-hf_client = Client("IDEA-Research/Grounded-SAM2")
+from gemini_extract import extract_jewelry_params
+from trellis_client import image_to_glb
 
 app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+)
 
-PROMPT = """Analyze this jewelry image. Return ONLY raw JSON, no markdown, no backticks.
-{
-  "jewelry_type": "ring", "style": "solitaire", "shoulder": "plain",
-  "stone_cut": "brilliant", "metal": "yellow_gold", "stone": "diamond",
-  "prong_count": 4, "halo": false, "band_profile": "comfort",
-  "band_diameter_mm": 17.2, "band_width_mm": 2.2, "stone_size_mm": 6.5
-}
-Output raw JSON only. Nothing else."""
-
-DEFAULTS = {
-    "jewelry_type": "ring", "style": "solitaire", "shoulder": "plain", "stone_cut": "brilliant",
-    "metal": "yellow_gold", "stone": "diamond", "prong_count": 4, "halo": False,
-    "band_profile": "comfort", "band_diameter_mm": 17.2, "band_width_mm": 2.2, "stone_size_mm": 6.5
-}
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "output")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 class SegmentPayload(BaseModel):
     images_b64: list[str]
-    prompt: str = "gemstone, diamond, jewel"
+    prompt: str = ""
 
-@app.post("/analyze")
-async def analyze(file: UploadFile = File(...)):
-    img_path = f"temp_{file.filename}"
-    image_bytes = await file.read()
-    with open(img_path, "wb") as f: f.write(image_bytes)
-
+@app.post("/process")
+async def process_jewelry(file: UploadFile = File(...)):
+    suffix = os.path.splitext(file.filename)[1] or ".jpg"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        img_path = tmp.name
     try:
-        ext = img_path.split('.')[-1].lower()
-        mime = {"jpg":"image/jpeg","jpeg":"image/jpeg", "png":"image/png"}.get(ext,"image/jpeg")
-        image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime)
-
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=[PROMPT, image_part]
-        )
-        text = response.text.strip()
-        params = json.loads(text[text.find('{'):text.rfind('}')+1])
+        params = extract_jewelry_params(img_path)
+        glb_path = image_to_glb(img_path, out_dir=OUTPUT_DIR)
         
-        for k, v in DEFAULTS.items():
-            if k not in params or params[k] is None: params[k] = v
-                
-        if os.path.exists(img_path): os.remove(img_path)
-        return {"success": True, "params": params, "is_fallback": False}
-
+        # --- SMART CONSTRAINTS: Calculate Physical Volume ---
+        try:
+            scene = trimesh.load(glb_path, force='mesh')
+            volume_mm3 = scene.volume if scene.is_watertight else scene.convex_hull.volume
+            # Estimate metal is 85% of total volume, convert to cm^3
+            params["metal_volume_cm3"] = round((volume_mm3 * 0.85) / 1000, 3)
+        except Exception as e:
+            print(f"Trimesh volume error: {e}")
+            params["metal_volume_cm3"] = 1.2 # Fallback volume
+            
+        with open(glb_path, "rb") as f:
+            glb_b64 = base64.b64encode(f.read()).decode("utf-8")
+            
+        return JSONResponse({
+            "success": True,
+            "glb_b64": glb_b64,
+            "params": params,
+            "message": "3D model generated and compiled successfully"
+        })
     except Exception as e:
-        print(f"Vision API failed: {e}")
-        if os.path.exists(img_path): os.remove(img_path)
-        return {"success": True, "params": DEFAULTS, "is_fallback": True}
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if os.path.exists(img_path): os.unlink(img_path)
 
 @app.post("/segment")
 async def segment_views(payload: SegmentPayload):
-    print(f"\n[SAM2] Processing {len(payload.images_b64)} views...")
+    print(f"\n[AI COMPILER] Sending {len(payload.images_b64)} Normal Map renders to Gemini Vision...")
     masks_b64 = []
     
+    gemini_contents = [
+        "You are an AI spatial segmentation assistant. Look at these 6 Normal Map renders of a 3D ring (Front, Back, Right, Left, Top, Bottom).",
+        "The gemstone is the highly noisy, faceted, multi-colored structure.",
+        "Return ONLY raw JSON extracting the EXACT tight bounding box percentages (0 to 100) of the gemstone for each view. If no gemstone is visible in a view, return 0 for all.",
+        '{"view_0": {"xmin": 30, "ymin": 0, "xmax": 70, "ymax": 35}, "view_1": {"xmin": 30, "ymin": 0, "xmax": 70, "ymax": 35}, "view_2": {"xmin": 30, "ymin": 0, "xmax": 70, "ymax": 35}, "view_3": {"xmin": 30, "ymin": 0, "xmax": 70, "ymax": 35}, "view_4": {"xmin": 30, "ymin": 30, "xmax": 70, "ymax": 70}, "view_5": {"xmin": 0, "ymin": 0, "xmax": 0, "ymax": 0}}'
+    ]
+    
+    pil_images = []
     for idx, img_b64 in enumerate(payload.images_b64):
         header, encoded = img_b64.split(",", 1) if "," in img_b64 else ("", img_b64)
-        temp_img = f"temp_view_{idx}.png"
+        img_bytes = base64.b64decode(encoded)
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+        pil_images.append(img)
+        gemini_contents.append(types.Part.from_bytes(data=img_bytes, mime_type="image/png"))
+
+    try:
+        resp = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=gemini_contents
+        )
+        text = resp.text.strip().replace("```json", "").replace("```", "").strip()
+        region_data = json.loads(text)
+    except Exception as e:
+        print(f"[AI COMPILER] Gemini Segmentation Failed: {e}. Falling back to default top ellipse.")
+        region_data = {f"view_{i}": {"xmin": 30, "ymin": 0, "xmax": 70, "ymax": 35} for i in range(6)}
+        region_data["view_4"] = {"xmin": 30, "ymin": 30, "xmax": 70, "ymax": 70} # Top view center
+        region_data["view_5"] = {"xmin": 0, "ymin": 0, "xmax": 0, "ymax": 0} # Bottom usually empty
+
+    for idx, img in enumerate(pil_images):
+        mask = Image.new("L", img.size, 0) 
+        draw = ImageDraw.Draw(mask)
+        bbox = img.getbbox() 
+        view_key = f"view_{idx}"
         
-        with open(temp_img, "wb") as f:
-            f.write(base64.b64decode(encoded))
+        xmin_pct = region_data.get(view_key, {}).get("xmin", 0) / 100.0
+        ymin_pct = region_data.get(view_key, {}).get("ymin", 0) / 100.0
+        xmax_pct = region_data.get(view_key, {}).get("xmax", 0) / 100.0
+        ymax_pct = region_data.get(view_key, {}).get("ymax", 0) / 100.0
+        
+        if bbox and (xmax_pct > 0 and ymax_pct > 0):
+            left, upper, right, lower = bbox
+            width = right - left
+            height = lower - upper
             
-        try:
-            # Hit SAM2 to cut out the gemstone based on the text prompt
-            result = hf_client.predict(
-                image_input=handle_file(temp_img),
-                text_prompt=payload.prompt,
-                box_threshold=0.25,
-                text_threshold=0.25,
-                api_name="/run_grounded_sam2"
-            )
-            mask_path = result[1] # Usually the second output is the raw binary mask
+            x0 = left + int(width * xmin_pct)
+            y0 = upper + int(height * ymin_pct)
+            x1 = left + int(width * xmax_pct)
+            y1 = upper + int(height * ymax_pct)
             
-            with open(mask_path, "rb") as mf:
-                masks_b64.append(f"data:image/png;base64,{base64.b64encode(mf.read()).decode()}")
-            print(f"[SAM2] View {idx+1} segmented.")
-        except Exception as e:
-            print(f"[SAM2] Failed on view {idx+1}: {e}")
-            masks_b64.append(None)
-        finally:
-            if os.path.exists(temp_img): os.remove(temp_img)
+            draw.ellipse([x0, y0, x1, y1], fill=255)
+                            
+        buf = io.BytesIO()
+        mask.save(buf, format="PNG")
+        masks_b64.append(f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}")
 
     return {"success": True, "masks": masks_b64}
 
