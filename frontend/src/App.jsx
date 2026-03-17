@@ -9,6 +9,7 @@ const DENSITY = {
   white_gold: 19.32,
   rose_gold: 19.32,
 };
+
 const PRICING = {
   metal: {
     platinum: 4000,
@@ -24,6 +25,7 @@ const PRICING = {
     amethyst: 800,
     moissanite: 4000,
     tsavorite: 12000,
+    lab_diamond: 35000,
   },
   secondary_stone: {
     diamond: 15000,
@@ -59,6 +61,11 @@ export default function App() {
   const [status, setStatus] = useState(
     "Upload a design to launch the compiler.",
   );
+
+  const [userPrompt, setUserPrompt] = useState(
+    "Generate this ring, my maximum budget is Rs 45000",
+  );
+  const [agentReport, setAgentReport] = useState("");
 
   const fileRef = useRef(null);
 
@@ -106,29 +113,40 @@ export default function App() {
     if (!file) return;
     setLoading(true);
     setGlbB64(null);
-    setStatus("🔍 Compiling Geometry & Calculating Mass...");
+    setAgentReport("");
+    setStatus("Agent Orchestrating Pipeline & Calculating Mass...");
 
     try {
       const form = new FormData();
       form.append("file", file);
+      form.append("prompt", userPrompt);
+
       const res = await fetch(`${API}/process`, { method: "POST", body: form });
       const data = await res.json();
       if (!data.success) throw new Error(data.detail || "Processing failed");
 
       setGlbB64(data.glb_b64);
       const safeVolume = data.params?.metal_volume_cm3 || 1.2;
+
       setParams((p) => ({
         ...p,
         ...data.params,
+        metal: data.params?.final_metal || data.params?.metal || "rose_gold",
+        primary_stone:
+          data.params?.final_stone || data.params?.primary_stone || "diamond",
         metal_volume_cm3: safeVolume,
         finishRoughness: 0.12,
         gemBrilliance: 2.5,
       }));
+
+      setAgentReport(
+        data.params?.agent_report || "No agent interventions needed.",
+      );
       setStatus(
-        `✅ Compiled ${(data.params?.jewelry_type || "solitaire").replace("_", " ")} (Volume: ${safeVolume} cm³)`,
+        `Compiled ${(data.params?.jewelry_type || "solitaire").replace("_", " ")} (Volume: ${safeVolume} cm³)`,
       );
     } catch (err) {
-      setStatus("❌ " + err.message);
+      setStatus("Error: " + err.message);
     }
     setLoading(false);
     e.target.value = "";
@@ -139,77 +157,57 @@ export default function App() {
   }
 
   function getSmartAdvice() {
-    if (!params) return [];
+    if (!params || !details) return [];
     const advice = [];
     const currentStonePrice =
       PRICING.primary_stone[params.primary_stone] || 45000;
     const currentMetalPrice = PRICING.metal[params.metal] || 6500;
 
-    if (params.primary_stone === "diamond") {
-      const savings =
-        (currentStonePrice - PRICING.primary_stone["moissanite"]) *
-        (details?.carat || 1);
+    if (
+      params.primary_stone === "diamond" ||
+      params.primary_stone === "lab_diamond"
+    ) {
+      const diff = currentStonePrice - PRICING.primary_stone["moissanite"];
       advice.push({
         type: "save",
         title: "Swap to Moissanite",
         desc: "Identical optical fire under studio light.",
-        diff: savings,
+        diff: diff * (details.carat || 1),
         action: () => set("primary_stone", "moissanite"),
       });
-    }
-    if (params.primary_stone === "emerald") {
-      const savings =
-        (currentStonePrice - PRICING.primary_stone["tsavorite"]) *
-        (details?.carat || 1);
-      advice.push({
-        type: "save",
-        title: "Swap to Tsavorite",
-        desc: "More durable green stone for daily wear.",
-        diff: savings,
-        action: () => set("primary_stone", "tsavorite"),
-      });
-    }
-    if (params.metal === "platinum") {
-      const wgPrice = PRICING.metal["white_gold"];
-      const savings = Math.round(
-        (details?.weightGrams || 10) * (currentMetalPrice - wgPrice),
-      );
-      advice.push({
-        type: "save",
-        title: "Downgrade to White Gold",
-        desc: "Visually identical silver finish, lighter weight.",
-        diff: savings,
-        action: () => set("metal", "white_gold"),
-      });
-    }
-
-    if (params.primary_stone === "moissanite") {
-      const cost =
-        (PRICING.primary_stone["diamond"] - currentStonePrice) *
-        (details?.carat || 1);
+    } else {
+      const diff = PRICING.primary_stone["diamond"] - currentStonePrice;
       advice.push({
         type: "upgrade",
         title: "Upgrade to Natural Diamond",
         desc: "Maximum prestige and long-term value retention.",
-        diff: cost,
+        diff: diff * (details.carat || 1),
         action: () => set("primary_stone", "diamond"),
       });
     }
-    if (["white_gold", "yellow_gold", "rose_gold"].includes(params.metal)) {
-      const platPrice = PRICING.metal["platinum"];
-      const cost = Math.round(
-        (details?.weightGrams || 10) * Math.abs(currentMetalPrice - platPrice),
-      );
-      if (platPrice > currentMetalPrice) {
-        advice.push({
-          type: "upgrade",
-          title: "Upgrade to Platinum",
-          desc: "Hypoallergenic, ultra-durable premium metal.",
-          diff: cost,
-          action: () => set("metal", "platinum"),
-        });
-      }
+
+    if (params.metal === "platinum" || params.metal === "white_gold") {
+      const diff = currentMetalPrice - PRICING.metal["yellow_gold"];
+      const type = diff >= 0 ? "save" : "upgrade";
+      advice.push({
+        type: type,
+        title: "Swap to Yellow Gold",
+        desc: "Classic traditional aesthetic.",
+        diff: Math.abs(diff) * (details.weightGrams || 10),
+        action: () => set("metal", "yellow_gold"),
+      });
+    } else {
+      const diff = currentMetalPrice - PRICING.metal["platinum"];
+      const type = diff >= 0 ? "save" : "upgrade";
+      advice.push({
+        type: type,
+        title: "Swap to Platinum",
+        desc: "Ultra-durable premium metal.",
+        diff: Math.abs(diff) * (details.weightGrams || 10),
+        action: () => set("metal", "platinum"),
+      });
     }
+
     return advice;
   }
 
@@ -218,20 +216,29 @@ export default function App() {
   return (
     <div style={S.root}>
       <header style={S.header}>
-        <span style={S.logo}>⬡ FORGE</span>
-        <span style={S.tagline}>Jeweler's Compiler</span>
-        <span style={S.badge}>Live Parametric Editor</span>
+        <span style={S.logo}>FORGE</span>
+        <span style={S.tagline}>Parametric Agentic Compiler</span>
+        <span style={S.badge}>Live Volumetric Editor</span>
       </header>
 
       <div style={S.body}>
         <div style={S.left}>
+          <h2 style={{ ...S.sec, marginTop: 0 }}>Agentic Constraints</h2>
+          <textarea
+            value={userPrompt}
+            onChange={(e) => setUserPrompt(e.target.value)}
+            rows={2}
+            style={S.promptArea}
+          />
+
           <button
             onClick={() => fileRef.current.click()}
             disabled={loading}
             style={S.uploadBtn}
           >
-            {loading ? "⏳  Compiling..." : "📷  Upload Design"}
+            {loading ? "Compiling & Negotiating..." : "Upload & Run Swarm"}
           </button>
+
           <input
             ref={fileRef}
             type="file"
@@ -243,6 +250,13 @@ export default function App() {
 
           {glbB64 && (
             <div style={{ marginTop: 20 }}>
+              {agentReport && (
+                <div style={S.agentCard}>
+                  <h3 style={S.agentTitle}>Agentic Supervisor</h3>
+                  <p style={S.agentText}>{agentReport}</p>
+                </div>
+              )}
+
               <div style={S.flexBetween}>
                 <h2 style={S.sec}>Materials</h2>
                 <span style={S.typeBadge}>
@@ -252,6 +266,17 @@ export default function App() {
                 </span>
               </div>
 
+              <h3
+                style={{
+                  fontSize: 11,
+                  color: "#888",
+                  marginBottom: 8,
+                  textTransform: "uppercase",
+                  letterSpacing: 1,
+                }}
+              >
+                Metal Band
+              </h3>
               <div style={S.grid2}>
                 {[
                   ["yellow_gold", "Yellow Gold"],
@@ -272,6 +297,18 @@ export default function App() {
                 ))}
               </div>
 
+              <h3
+                style={{
+                  fontSize: 11,
+                  color: "#888",
+                  marginBottom: 8,
+                  marginTop: 16,
+                  textTransform: "uppercase",
+                  letterSpacing: 1,
+                }}
+              >
+                Gemstone
+              </h3>
               <div style={S.grid3}>
                 {[
                   ["diamond", "Diamond"],
@@ -300,27 +337,31 @@ export default function App() {
               <div style={S.breakdownCard}>
                 <div style={S.bRow}>
                   <span>Metal ({details?.weightGrams || 0}g)</span>{" "}
-                  <span>₹{(details?.metalCost || 0).toLocaleString()}</span>
+                  <span>Rs {(details?.metalCost || 0).toLocaleString()}</span>
                 </div>
                 <div style={S.bRow}>
                   <span>Center Stone ({details?.carat || 0}ct)</span>{" "}
-                  <span>₹{(details?.mainStoneCost || 0).toLocaleString()}</span>
+                  <span>
+                    Rs {(details?.mainStoneCost || 0).toLocaleString()}
+                  </span>
                 </div>
                 <div style={S.bRow}>
                   <span>Labor & Making</span>{" "}
-                  <span>₹{(details?.labor || 0).toLocaleString()}</span>
+                  <span>Rs {(details?.labor || 0).toLocaleString()}</span>
                 </div>
                 <div style={{ ...S.bRow, ...S.bTotal }}>
                   <span>Total Est. Retail</span>{" "}
                   <span style={{ color: "#10b981" }}>
-                    ₹{(details?.total || 0).toLocaleString()}
+                    Rs {(details?.total || 0).toLocaleString()}
                   </span>
                 </div>
               </div>
 
               {smartAdvice.length > 0 && (
                 <>
-                  <h2 style={{ ...S.sec, marginTop: 24 }}>Smart Advisor</h2>
+                  <h2 style={{ ...S.sec, marginTop: 24 }}>
+                    Post-Generation Suggestions
+                  </h2>
                   <div style={S.adviceContainer}>
                     {smartAdvice.map((adv, i) => (
                       <div
@@ -340,7 +381,7 @@ export default function App() {
                                 : S.adviceDiffUpgrade
                             }
                           >
-                            {adv.type === "save" ? "-" : "+"}₹
+                            {adv.type === "save" ? "-" : "+"}Rs{" "}
                             {(Math.abs(adv.diff) || 0).toLocaleString()}
                           </span>
                         </div>
@@ -402,7 +443,7 @@ export default function App() {
             <div style={S.placeholderBox}>
               <div style={S.placeholderText}>
                 {loading
-                  ? "⏳ Extracting Spatial Parameters..."
+                  ? "Extracting Spatial Parameters..."
                   : "[ SYSTEM IDLE : AWAITING DESIGN UPLOAD ]"}
               </div>
             </div>
@@ -439,7 +480,13 @@ const S = {
     fontWeight: 700,
     letterSpacing: 2,
   },
-  tagline: { fontSize: 11, color: "#666", letterSpacing: 3, flex: 1 },
+  tagline: {
+    fontSize: 11,
+    color: "#666",
+    letterSpacing: 3,
+    flex: 1,
+    textTransform: "uppercase",
+  },
   badge: {
     fontSize: 10,
     color: "#10b981",
@@ -470,6 +517,53 @@ const S = {
     alignItems: "center",
     marginBottom: 8,
   },
+  grid2: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 8,
+    marginBottom: 12,
+  },
+  grid3: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr 1fr",
+    gap: 6,
+    marginBottom: 12,
+  },
+
+  promptArea: {
+    width: "100%",
+    padding: "12px",
+    background: "#111118",
+    border: "1px solid #333",
+    borderRadius: 6,
+    color: "#C9A84C",
+    fontSize: 12,
+    marginBottom: 16,
+    resize: "vertical",
+    fontFamily: "'JetBrains Mono', monospace",
+  },
+  agentCard: {
+    background: "#0a0a0f",
+    border: "1px solid #10b981",
+    borderRadius: 6,
+    padding: 12,
+    marginBottom: 24,
+    boxShadow: "0 0 15px rgba(16, 185, 129, 0.1)",
+  },
+  agentTitle: {
+    fontSize: 11,
+    color: "#10b981",
+    textTransform: "uppercase",
+    letterSpacing: 1,
+    margin: "0 0 8px 0",
+  },
+  agentText: {
+    fontSize: 12,
+    color: "#ddd",
+    lineHeight: 1.5,
+    fontFamily: "'JetBrains Mono', monospace",
+  },
+
   uploadBtn: {
     width: "100%",
     padding: "14px 0",
@@ -508,26 +602,6 @@ const S = {
     color: "#aaa",
     letterSpacing: 1,
   },
-  lbl: {
-    fontSize: 11,
-    color: "#888",
-    marginBottom: 8,
-    marginTop: 8,
-    textTransform: "uppercase",
-    letterSpacing: 1,
-  },
-  grid2: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: 8,
-    marginBottom: 12,
-  },
-  grid3: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr 1fr",
-    gap: 6,
-    marginBottom: 12,
-  },
   chip: {
     padding: "10px 4px",
     background: "#111118",
@@ -545,8 +619,6 @@ const S = {
     color: "#E0C37A",
     boxShadow: "0 0 10px rgba(201, 168, 76, 0.1)",
   },
-  slider: { width: "100%", cursor: "pointer", accentColor: "#C9A84C" },
-  smallText: { fontSize: 9, color: "#666", textTransform: "uppercase" },
   breakdownCard: {
     background: "#111118",
     border: "1px solid #222230",
@@ -638,4 +710,14 @@ const S = {
     letterSpacing: 2,
     fontSize: 14,
   },
+  lbl: {
+    fontSize: 11,
+    color: "#888",
+    marginBottom: 8,
+    marginTop: 8,
+    textTransform: "uppercase",
+    letterSpacing: 1,
+  },
+  slider: { width: "100%", cursor: "pointer", accentColor: "#C9A84C" },
+  smallText: { fontSize: 9, color: "#666", textTransform: "uppercase" },
 };

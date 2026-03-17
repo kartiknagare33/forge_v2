@@ -23,18 +23,63 @@ const STONES = {
   amethyst: { color: 0x9b30ff, ior: 1.54 },
   moissanite: { color: 0xffffff, ior: 2.65 },
   tsavorite: { color: 0x22aa55, ior: 1.61 },
+  lab_diamond: { color: 0xffffff, ior: 2.42 },
 };
 
 export default function Viewer({ glbB64, params, loading }) {
   const mountRef = useRef(null);
   const stateRef = useRef({});
   const meshRef = useRef(null);
-  const segmentationDone = useRef(false);
-  const paramsRef = useRef(params);
   const [isSegmenting, setIsSegmenting] = useState(false);
 
+  const updateMaterials = (currentParams, targetMesh) => {
+    if (!targetMesh) return;
+    const p = currentParams || {};
+
+    const mProps = METALS[p.metal] || METALS.yellow_gold;
+    const sProps = STONES[p.primary_stone] || STONES.diamond;
+
+    if (Array.isArray(targetMesh.material)) {
+      const metalMat = targetMesh.material[0];
+      const stoneMat = targetMesh.material[1];
+
+      if (metalMat && metalMat.color) {
+        metalMat.color.setHex(mProps.color);
+        metalMat.roughness =
+          p.finishRoughness !== undefined ? p.finishRoughness : 0.12;
+        metalMat.needsUpdate = true;
+      }
+
+      if (stoneMat && stoneMat.color) {
+        stoneMat.color.setHex(sProps.color);
+        stoneMat.ior = sProps.ior || 2.42;
+        stoneMat.envMapIntensity =
+          p.gemBrilliance !== undefined ? p.gemBrilliance : 2.5;
+        stoneMat.needsUpdate = true;
+      }
+    } else {
+      if (
+        !targetMesh.material ||
+        targetMesh.material.type === "MeshNormalMaterial"
+      ) {
+        targetMesh.material = new THREE.MeshPhysicalMaterial({
+          color: mProps.color,
+          metalness: 1.0,
+          roughness: p.finishRoughness !== undefined ? p.finishRoughness : 0.12,
+        });
+      } else if (targetMesh.material.color) {
+        targetMesh.material.color.setHex(mProps.color);
+        targetMesh.material.roughness =
+          p.finishRoughness !== undefined ? p.finishRoughness : 0.12;
+        targetMesh.material.needsUpdate = true;
+      }
+    }
+  };
+
   useEffect(() => {
-    paramsRef.current = params || {};
+    if (meshRef.current) {
+      updateMaterials(params, meshRef.current);
+    }
   }, [params]);
 
   useEffect(() => {
@@ -106,43 +151,9 @@ export default function Viewer({ glbB64, params, loading }) {
     };
   }, []);
 
-  const updateMaterials = () => {
-    if (!meshRef.current || !segmentationDone.current) return;
-    const p = paramsRef.current || {};
-
-    if (
-      Array.isArray(meshRef.current.material) &&
-      meshRef.current.material.length === 2
-    ) {
-      const [metalMat, stoneMat] = meshRef.current.material;
-
-      const mProps = METALS[p.metal] || METALS.yellow_gold;
-      metalMat.color.setHex(mProps.color);
-      metalMat.roughness = p.finishRoughness || 0.12;
-
-      const sProps = STONES[p.primary_stone] || STONES.diamond;
-      stoneMat.color.setHex(sProps.color);
-      stoneMat.ior = sProps.ior;
-      stoneMat.envMapIntensity = p.gemBrilliance || 2.5;
-    }
-  };
-
-  useEffect(() => {
-    updateMaterials();
-  }, [
-    params?.metal,
-    params?.primary_stone,
-    params?.finishRoughness,
-    params?.gemBrilliance,
-  ]);
-
   useEffect(() => {
     if (!glbB64 || !stateRef.current.scene) return;
-    segmentationDone.current = false;
     const { scene, renderer } = stateRef.current;
-
-    const oldModel = scene.getObjectByName("jewelry_model");
-    if (oldModel) scene.remove(oldModel);
 
     const loader = new GLTFLoader();
     const dataUri = glbB64.startsWith("data:")
@@ -152,6 +163,9 @@ export default function Viewer({ glbB64, params, loading }) {
     loader.load(dataUri, async (gltf) => {
       const model = gltf.scene;
       model.name = "jewelry_model";
+
+      const existingModel = scene.getObjectByName("jewelry_model");
+      if (existingModel) scene.remove(existingModel);
 
       let targetMesh = null;
       model.traverse((c) => {
@@ -223,14 +237,15 @@ export default function Viewer({ glbB64, params, loading }) {
             }),
           );
 
-          const p = paramsRef.current || {};
+          const p = params || {};
           const mProps = METALS[p.metal] || METALS.yellow_gold;
           const sProps = STONES[p.primary_stone] || STONES.diamond;
 
           const metalMat = new THREE.MeshPhysicalMaterial({
             color: mProps.color,
             metalness: 1.0,
-            roughness: p.finishRoughness || 0.1,
+            roughness:
+              p.finishRoughness !== undefined ? p.finishRoughness : 0.1,
             clearcoat: 1.0,
             clearcoatRoughness: 0.05,
             envMapIntensity: 1.5,
@@ -246,7 +261,8 @@ export default function Viewer({ glbB64, params, loading }) {
             thickness: 2.5,
             dispersion: 1.5,
             transparent: true,
-            envMapIntensity: p.gemBrilliance || 2.5,
+            envMapIntensity:
+              p.gemBrilliance !== undefined ? p.gemBrilliance : 2.5,
             vertexColors: false,
           });
 
@@ -257,8 +273,7 @@ export default function Viewer({ glbB64, params, loading }) {
             metalMat,
             stoneMat,
           );
-          segmentationDone.current = true;
-          updateMaterials();
+          updateMaterials(params, targetMesh);
         }
       } catch (err) {
         console.error("SAMesh Pipeline Error:", err);
@@ -266,7 +281,6 @@ export default function Viewer({ glbB64, params, loading }) {
         setIsSegmenting(false);
       }
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [glbB64]);
 
   return (

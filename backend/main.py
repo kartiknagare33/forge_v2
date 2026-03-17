@@ -1,6 +1,6 @@
 import os, json, base64, tempfile, traceback, io, shutil
 import trimesh
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -29,8 +29,100 @@ class SegmentPayload(BaseModel):
     images_b64: list[str]
     prompt: str = ""
 
+PRICING_DATA = {
+    "metals": {
+        "platinum": {"density": 21.45, "price_per_gram": 4000, "name": "Platinum"},
+        "white_gold": {"density": 19.32, "price_per_gram": 6600, "name": "White Gold"},
+        "yellow_gold": {"density": 19.32, "price_per_gram": 6500, "name": "Yellow Gold"},
+        "rose_gold": {"density": 19.32, "price_per_gram": 6500, "name": "Rose Gold"}
+    },
+    "stones": {
+        "diamond":     {"price": 45000, "name": "Natural Diamond"},
+        "emerald":     {"price": 20000, "name": "Emerald"},
+        "ruby":        {"price": 18000, "name": "Ruby"},
+        "sapphire":    {"price": 15000, "name": "Sapphire"},
+        "lab_diamond": {"price": 35000, "name": "Lab-Grown Diamond"},
+        "moissanite":  {"price": 4000,  "name": "Moissanite"}
+    }
+}
+
+def run_agentic_optimization(prompt: str, volume_cm3: float):
+    print("\n[AGENTIC BRAIN] Parsing constraints from user prompt...")
+    metal = "yellow_gold"
+    stone = "diamond"
+    budget = 0
+    
+    if prompt:
+        try:
+            sys_prompt = (
+                "Extract jewelry constraints. Return ONLY a valid JSON object with 'metal' (platinum, white_gold, yellow_gold, rose_gold), "
+                "'stone' (diamond, emerald, ruby, sapphire, lab_diamond, moissanite), 'budget' (integer in INR). If no budget, return 0."
+            )
+            resp = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[sys_prompt, prompt]
+            )
+            text = resp.text.strip()
+            
+            start_idx = text.find('{')
+            end_idx = text.rfind('}')
+            if start_idx != -1 and end_idx != -1:
+                json_str = text[start_idx:end_idx+1]
+                data = json.loads(json_str)
+            else:
+                data = {}
+                
+            metal = str(data.get("metal", "yellow_gold")).lower().replace(" ", "_")
+            stone = str(data.get("stone", "diamond")).lower().replace(" ", "_")
+            budget = int(data.get("budget", 0))
+        except Exception as e:
+            print(f"[AGENT WARNING] Parse error: {e}. Defaulting to premium materials.")
+
+    def calc_price(m, s):
+        m_data = PRICING_DATA["metals"].get(m, PRICING_DATA["metals"]["yellow_gold"])
+        s_data = PRICING_DATA["stones"].get(s, PRICING_DATA["stones"]["diamond"])
+        return (volume_cm3 * m_data["density"] * m_data["price_per_gram"]) + s_data["price"]
+        
+    current_price = calc_price(metal, stone)
+    report = f"Target Budget: Rs {budget}. Baseline Physical Price: Rs {current_price:,.2f}."
+    print(f"[AGENTIC BRAIN] {report}")
+    
+    if budget == 0 or current_price <= budget:
+        print("[AGENTIC BRAIN] Budget met. No optimization needed.")
+        return metal, stone, current_price, report + " Configuration approved."
+        
+    print("[AGENTIC BRAIN] Alert: Exceeds budget. Initiating autonomous material negotiation...")
+    stone_hierarchy = ["diamond", "emerald", "ruby", "sapphire", "lab_diamond", "moissanite"]
+    metal_hierarchy = ["platinum", "white_gold", "yellow_gold", "rose_gold"]
+    
+    opt_stone = stone
+    opt_metal = metal
+    
+    if stone in stone_hierarchy:
+        for s in stone_hierarchy[stone_hierarchy.index(stone)+1:]:
+            test_price = calc_price(opt_metal, s)
+            print(f"[AGENTIC BRAIN] Proposing stone swap to {s}... Price: Rs {test_price:,.2f}")
+            if test_price <= budget:
+                return opt_metal, s, test_price, report + f" Autonomously swapped stone to {s} to meet budget. Final Price: Rs {test_price:,.2f}."
+            opt_stone = s
+            
+    if metal in metal_hierarchy:
+        for m in metal_hierarchy[metal_hierarchy.index(metal)+1:]:
+            test_price = calc_price(m, opt_stone)
+            print(f"[AGENTIC BRAIN] Proposing metal swap to {m}... Price: Rs {test_price:,.2f}")
+            if test_price <= budget:
+                return m, opt_stone, test_price, report + f" Autonomously swapped metal to {m} and stone to {opt_stone} to meet budget. Final Price: Rs {test_price:,.2f}."
+            opt_metal = m
+            
+    final_price = calc_price(opt_metal, opt_stone)
+    print("[AGENTIC BRAIN] Warning: Max downgrades reached.")
+    return opt_metal, opt_stone, final_price, report + f" Max downgrades applied. Best possible price: Rs {final_price:,.2f}."
+
 @app.post("/process")
-async def process_jewelry(file: UploadFile = File(...)):
+async def process_jewelry(
+    file: UploadFile = File(...),
+    prompt: str = Form("")
+):
     suffix = os.path.splitext(file.filename)[1] or ".jpg"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         shutil.copyfileobj(file.file, tmp)
@@ -39,15 +131,25 @@ async def process_jewelry(file: UploadFile = File(...)):
         params = extract_jewelry_params(img_path)
         glb_path = image_to_glb(img_path, out_dir=OUTPUT_DIR)
         
-        # --- SMART CONSTRAINTS: Calculate Physical Volume ---
         try:
             scene = trimesh.load(glb_path, force='mesh')
             volume_mm3 = scene.volume if scene.is_watertight else scene.convex_hull.volume
-            # Estimate metal is 85% of total volume, convert to cm^3
-            params["metal_volume_cm3"] = round((volume_mm3 * 0.85) / 1000, 3)
+            metal_volume_cm3 = round((volume_mm3 * 0.85) / 1000, 3)
+            
+            if metal_volume_cm3 < 0.1:
+                metal_volume_cm3 = 1.2
+                
+            params["metal_volume_cm3"] = metal_volume_cm3
         except Exception as e:
             print(f"Trimesh volume error: {e}")
-            params["metal_volume_cm3"] = 1.2 # Fallback volume
+            metal_volume_cm3 = 1.2
+            params["metal_volume_cm3"] = metal_volume_cm3
+            
+        final_metal, final_stone, final_price, agent_report = run_agentic_optimization(prompt, metal_volume_cm3)
+        params["final_metal"] = final_metal
+        params["final_stone"] = final_stone
+        params["calculated_price_inr"] = final_price
+        params["agent_report"] = agent_report
             
         with open(glb_path, "rb") as f:
             glb_b64 = base64.b64encode(f.read()).decode("utf-8")
@@ -89,13 +191,19 @@ async def segment_views(payload: SegmentPayload):
             model="gemini-2.5-flash",
             contents=gemini_contents
         )
-        text = resp.text.strip().replace("```json", "").replace("```", "").strip()
-        region_data = json.loads(text)
+        text = resp.text.strip()
+        start_idx = text.find('{')
+        end_idx = text.rfind('}')
+        if start_idx != -1 and end_idx != -1:
+            json_str = text[start_idx:end_idx+1]
+            region_data = json.loads(json_str)
+        else:
+            raise Exception("No JSON object found")
     except Exception as e:
         print(f"[AI COMPILER] Gemini Segmentation Failed: {e}. Falling back to default top ellipse.")
         region_data = {f"view_{i}": {"xmin": 30, "ymin": 0, "xmax": 70, "ymax": 35} for i in range(6)}
-        region_data["view_4"] = {"xmin": 30, "ymin": 30, "xmax": 70, "ymax": 70} # Top view center
-        region_data["view_5"] = {"xmin": 0, "ymin": 0, "xmax": 0, "ymax": 0} # Bottom usually empty
+        region_data["view_4"] = {"xmin": 30, "ymin": 30, "xmax": 70, "ymax": 70} 
+        region_data["view_5"] = {"xmin": 0, "ymin": 0, "xmax": 0, "ymax": 0} 
 
     for idx, img in enumerate(pil_images):
         mask = Image.new("L", img.size, 0) 
