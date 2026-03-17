@@ -1,6 +1,12 @@
 # FORGE
 ### Syrus 2026 - Team Blitzkrieg | Rezinix AI Track (Open Innovation)
 
+## 📚 Project Resources
+
+- 📄 **Documentation:** [View Google Doc](https://docs.google.com/document/d/1oIzGi6DKZN9Mrrn8sRoCDPZhbIjF0gjxMhFVN2JsxiY/edit?usp=sharing)
+- 📊 **Presentation:** [View on Canva](https://www.canva.com/design/DAHENbnx46w/_82SZR4cr98UTwXFctcdow/edit?utm_content=DAHENbnx46w&utm_campaign=designshare&utm_medium=link2&utm_source=sharebutton)
+- 🎥 **Video Demo:** [Watch on YouTube](https://youtu.be/Sa5909W0fyQ?si=cpaMp8GeI6uF5l16)
+
 **FORGE** is a Parametric Agentic Compiler for jewelry manufacturing. It bridges the gap between diffusion-based Generative AI, deterministic spatial mathematics, and autonomous agentic reasoning. 
 
 Traditional 3D generative AI outputs topologically fused meshes—mathematically inseparable blobs of pixels that cannot be accurately priced, customized, or used in CAD manufacturing. Furthermore, zero-shot LLM vision pipelines suffer from the Small Object Detection (SOD) problem, entirely missing sub-pixel micro-geometry like pavé stones. FORGE solves this by transforming a 2D sketch and a natural language budget constraint into a mathematically verified, budget-compliant, and manufacturing-ready 3D asset.
