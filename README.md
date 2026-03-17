@@ -1,5 +1,7 @@
 # FORGE
-### Syrus 2026 - Team Blitzkrieg | Rezinix AI Track
+### Syrus 2026 - Team Blitzkrieg | Agentic AI Track 
+### PS 1 :  AI-Driven 2D to 3D Jewelry Generation with Real-Time Customization
+
 
 ## 📚 Project Resources
 
