@@ -1,5 +1,5 @@
 # FORGE
-### Syrus 2026 - Team Blitzkrieg | Rezinix AI Track (Open Innovation)
+### Syrus 2026 - Team Blitzkrieg | Rezinix AI Track
 
 ## 📚 Project Resources
 
