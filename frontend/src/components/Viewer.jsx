@@ -29,56 +29,43 @@ const STONES = {
 export default function Viewer({ glbB64, params, loading }) {
   const mountRef = useRef(null);
   const stateRef = useRef({});
-  const meshRef = useRef(null);
   const [isSegmenting, setIsSegmenting] = useState(false);
 
-  const updateMaterials = (currentParams, targetMesh) => {
-    if (!targetMesh) return;
+  const updateMaterials = (currentParams, rootScene) => {
+    if (!rootScene) return;
     const p = currentParams || {};
 
     const mProps = METALS[p.metal] || METALS.yellow_gold;
     const sProps = STONES[p.primary_stone] || STONES.diamond;
 
-    if (Array.isArray(targetMesh.material)) {
-      const metalMat = targetMesh.material[0];
-      const stoneMat = targetMesh.material[1];
+    rootScene.traverse((child) => {
+      if (child.isMesh && child.material) {
+        if (Array.isArray(child.material)) {
+          const metalMat = child.material[0];
+          const stoneMat = child.material[1];
 
-      if (metalMat && metalMat.color) {
-        metalMat.color.setHex(mProps.color);
-        metalMat.roughness =
-          p.finishRoughness !== undefined ? p.finishRoughness : 0.12;
-        metalMat.needsUpdate = true;
-      }
+          if (metalMat) {
+            metalMat.color.setHex(mProps.color);
+            metalMat.roughness =
+              p.finishRoughness !== undefined ? p.finishRoughness : 0.12;
+            metalMat.needsUpdate = true;
+          }
 
-      if (stoneMat && stoneMat.color) {
-        stoneMat.color.setHex(sProps.color);
-        stoneMat.ior = sProps.ior || 2.42;
-        stoneMat.envMapIntensity =
-          p.gemBrilliance !== undefined ? p.gemBrilliance : 2.5;
-        stoneMat.needsUpdate = true;
+          if (stoneMat) {
+            stoneMat.color.setHex(sProps.color);
+            stoneMat.ior = sProps.ior || 2.42;
+            stoneMat.envMapIntensity =
+              p.gemBrilliance !== undefined ? p.gemBrilliance : 2.5;
+            stoneMat.needsUpdate = true;
+          }
+        }
       }
-    } else {
-      if (
-        !targetMesh.material ||
-        targetMesh.material.type === "MeshNormalMaterial"
-      ) {
-        targetMesh.material = new THREE.MeshPhysicalMaterial({
-          color: mProps.color,
-          metalness: 1.0,
-          roughness: p.finishRoughness !== undefined ? p.finishRoughness : 0.12,
-        });
-      } else if (targetMesh.material.color) {
-        targetMesh.material.color.setHex(mProps.color);
-        targetMesh.material.roughness =
-          p.finishRoughness !== undefined ? p.finishRoughness : 0.12;
-        targetMesh.material.needsUpdate = true;
-      }
-    }
+    });
   };
 
   useEffect(() => {
-    if (meshRef.current) {
-      updateMaterials(params, meshRef.current);
+    if (stateRef.current.scene) {
+      updateMaterials(params, stateRef.current.scene);
     }
   }, [params]);
 
@@ -174,6 +161,7 @@ export default function Viewer({ glbB64, params, loading }) {
           if (c.geometry.attributes.color) c.geometry.deleteAttribute("color");
           if (c.geometry.attributes.uv) c.geometry.deleteAttribute("uv");
           c.geometry.computeVertexNormals();
+
           c.material = new THREE.MeshNormalMaterial();
         }
       });
@@ -187,15 +175,14 @@ export default function Viewer({ glbB64, params, loading }) {
 
       scene.add(model);
       if (!targetMesh) return;
-      meshRef.current = targetMesh;
 
       setIsSegmenting(true);
       try {
-        const orthoCameras = setupMultiViewCameras(targetMesh, 512, 512);
+        const orthoCameras = setupMultiViewCameras(targetMesh, 1024, 1024);
         const screenshots = [];
         const originalClearAlpha = renderer.getClearAlpha();
         renderer.setClearAlpha(0);
-        renderer.setSize(512, 512);
+        renderer.setSize(1024, 1024);
 
         for (const cam of orthoCameras) {
           renderer.render(scene, cam);
@@ -213,7 +200,7 @@ export default function Viewer({ glbB64, params, loading }) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             images_b64: screenshots,
-            prompt: "gemstone, diamond",
+            prompt: "Identify the main center gemstone.",
           }),
         });
 
@@ -226,11 +213,11 @@ export default function Viewer({ glbB64, params, loading }) {
                 const img = new Image();
                 img.onload = () => {
                   const canvas = document.createElement("canvas");
-                  canvas.width = 512;
-                  canvas.height = 512;
+                  canvas.width = 1024;
+                  canvas.height = 1024;
                   const ctx = canvas.getContext("2d");
-                  ctx.drawImage(img, 0, 0, 512, 512);
-                  resolve(ctx.getImageData(0, 0, 512, 512));
+                  ctx.drawImage(img, 0, 0, 1024, 1024);
+                  resolve(ctx.getImageData(0, 0, 1024, 1024));
                 };
                 img.src = m;
               });
@@ -273,7 +260,7 @@ export default function Viewer({ glbB64, params, loading }) {
             metalMat,
             stoneMat,
           );
-          updateMaterials(params, targetMesh);
+          updateMaterials(params, scene);
         }
       } catch (err) {
         console.error("SAMesh Pipeline Error:", err);
@@ -321,7 +308,7 @@ export default function Viewer({ glbB64, params, loading }) {
             borderRadius: 4,
           }}
         >
-          [AI] SAMesh Lift: 6-Axis Intersection Active...
+          [AI] Hybrid SAMesh Pipeline Active...
         </div>
       )}
       <div ref={mountRef} style={{ width: "100%", height: "100%" }} />
