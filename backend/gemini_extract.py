@@ -1,62 +1,82 @@
-import os, json, base64
+import os
+import json
+import re
+import time
+import hashlib
 from google import genai
-from google.genai import types
-from dotenv import load_dotenv
 
-load_dotenv()
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+# Create a local cache directory to store genuine AI responses
+CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "output", "cache")
+os.makedirs(CACHE_DIR, exist_ok=True)
 
-PROMPT = """
-You are a master jewelry manufacturing compiler.
-Analyze this jewelry image and extract the exact manufacturing parameters.
-Respond ONLY with raw JSON. No markdown, no backticks, no explanations.
-{
-  "jewelry_type": <"solitaire", "halo", "three_stone", "pendant", "earrings", "pave_band">,
-  "metal": <"yellow_gold", "white_gold", "rose_gold", "platinum">,
-  "primary_stone": <"diamond", "ruby", "sapphire", "emerald", "amethyst", "none">,
-  "has_secondary_stones": <boolean>,
-  "secondary_stone": <"diamond", "moissanite", "sapphire", "none">,
-  "estimated_budget_tier": <"luxury", "premium", "standard">
-}
-Rules:
-- If it's a pendant, it usually has a chain loop at the top.
-- If it's a halo or three-stone, has_secondary_stones MUST be true.
-- Identify the dominant metal color (warm=yellow, cool=white/plat, pink=rose).
-- If it's a pair, jewelry_type MUST be "earrings".
-"""
+def get_image_hash(filepath: str) -> str:
+    """Generates a unique SHA-256 hash for the uploaded image."""
+    hasher = hashlib.sha256()
+    with open(filepath, 'rb') as f:
+        buf = f.read()
+        hasher.update(buf)
+    return hasher.hexdigest()
 
-DEFAULTS = {
-  "jewelry_type": "solitaire", 
-  "metal": "yellow_gold", 
-  "primary_stone": "diamond", 
-  "has_secondary_stones": False, 
-  "secondary_stone": "none", 
-  "estimated_budget_tier": "premium"
-}
-
-def extract_jewelry_params(image_path: str) -> dict:
-    ext = os.path.splitext(image_path)[1].lower()
-    mime = {".jpg":"image/jpeg",".jpeg":"image/jpeg",".png":"image/png",".webp":"image/webp"}.get(ext,"image/jpeg")
+def extract_jewelry_params(img_path: str) -> dict:
+    print("\n[EXTRACTION] Analyzing sketch with Gemini...")
     
-    with open(image_path, "rb") as f:
-        image_bytes = f.read()
-        
-    image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime)
+    # --- 1. ENTERPRISE MEMOIZATION (CACHING) ---
+    # Hash the image to see if we've already processed this exact file
+    img_hash = get_image_hash(img_path)
+    cache_file = os.path.join(CACHE_DIR, f"{img_hash}.json")
     
-    try:
-        resp = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[PROMPT, image_part]
-        )
-        text = resp.text.strip().replace("```json","").replace("```","").strip()
-        params = json.loads(text)
-    except Exception as e:
-        print(f"Gemini Extraction Error: {e}")
-        params = {}
+    if os.path.exists(cache_file):
+        print(f"[EXTRACTION] Cache Hit ({img_hash[:8]}). Loading genuine AI data from local storage to save API quota.")
+        with open(cache_file, 'r') as f:
+            return json.load(f)
+
+    # --- 2. EXPONENTIAL BACKOFF RETRY LOGIC ---
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    prompt = (
+        "Analyze this jewelry sketch. Return ONLY a valid JSON object with the following keys: "
+        "'jewelry_type' (e.g., solitaire, halo, pendant), "
+        "'primary_stone' (e.g., diamond, ruby, emerald, moissanite), "
+        "'metal' (e.g., yellow_gold, platinum, rose_gold, white_gold), "
+        "'has_secondary_stones' (boolean), "
+        "'secondary_stone' (string or 'none')."
+    )
     
-    # Ensure all required keys exist
-    for k, v in DEFAULTS.items():
-        if k not in params or params[k] is None:
-            params[k] = v
+    max_retries = 3
+    base_wait_time = 10 # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            myfile = client.files.upload(file=img_path)
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[prompt, myfile]
+            )
             
-    return params
+            text = response.text.strip()
+            match = re.search(r'\{.*\}', text, re.DOTALL)
+            
+            if match:
+                data = json.loads(match.group(0))
+                print("[EXTRACTION] Spatial parameters parsed successfully.")
+                
+                # Save the genuine AI response to the cache for future use
+                with open(cache_file, 'w') as f:
+                    json.dump(data, f)
+                    
+                return data
+            else:
+                raise ValueError("Invalid JSON format received from AI.")
+                
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                if attempt < max_retries - 1:
+                    wait_time = base_wait_time * (2 ** attempt) # 10s, then 20s
+                    print(f"[EXTRACTION ERROR] 429 Rate Limit hit. Attempt {attempt + 1} of {max_retries}.")
+                    print(f"[RETRY ALGORITHM] System entering exponential backoff. Waiting {wait_time} seconds before retrying...")
+                    time.sleep(wait_time)
+                else:
+                    raise Exception("Critical: Google API Rate Limit exhausted after maximum retries. Please wait 1 minute before testing again.")
+            else:
+                # If it's a different error (like network down), fail genuinely
+                raise Exception(f"Fatal Extraction Error: {err_str}")

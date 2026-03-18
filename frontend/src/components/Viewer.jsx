@@ -9,21 +9,100 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 import { setupMultiViewCameras, applySAMeshMasks } from "../SAMeshLifter";
 
 const METALS = {
-  yellow_gold: { color: 0xffd700 },
-  white_gold: { color: 0xf8f8f8 },
-  rose_gold: { color: 0xe8a090 },
-  platinum: { color: 0xe5e4e2 },
+  yellow_gold: { color: 0xffd700, metalness: 1.0 },
+  white_gold: { color: 0xf8f8f8, metalness: 1.0 },
+  rose_gold: { color: 0xe8a090, metalness: 1.0 },
+  platinum: { color: 0xe5e4e2, metalness: 1.0 },
+  titanium: { color: 0x878681, metalness: 1.0 },
+  black_rhodium: { color: 0x222224, metalness: 1.0 },
+  sterling_silver: { color: 0xc0c0c0, metalness: 1.0 },
 };
 
 const STONES = {
-  diamond: { color: 0xffffff, ior: 2.42 },
-  ruby: { color: 0xff1020, ior: 1.76 },
-  sapphire: { color: 0x0030ff, ior: 1.77 },
-  emerald: { color: 0x10c050, ior: 1.58 },
-  amethyst: { color: 0x9b30ff, ior: 1.54 },
-  moissanite: { color: 0xffffff, ior: 2.65 },
-  tsavorite: { color: 0x22aa55, ior: 1.61 },
-  lab_diamond: { color: 0xffffff, ior: 2.42 },
+  diamond: {
+    color: 0xffffff,
+    ior: 2.42,
+    transmission: 1.0,
+    roughness: 0.0,
+    metalness: 0.0,
+  },
+  ruby: {
+    color: 0xff1020,
+    ior: 1.76,
+    transmission: 1.0,
+    roughness: 0.0,
+    metalness: 0.0,
+  },
+  sapphire: {
+    color: 0x0030ff,
+    ior: 1.77,
+    transmission: 1.0,
+    roughness: 0.0,
+    metalness: 0.0,
+  },
+  emerald: {
+    color: 0x10c050,
+    ior: 1.58,
+    transmission: 1.0,
+    roughness: 0.0,
+    metalness: 0.0,
+  },
+  amethyst: {
+    color: 0x9b30ff,
+    ior: 1.54,
+    transmission: 1.0,
+    roughness: 0.0,
+    metalness: 0.0,
+  },
+  moissanite: {
+    color: 0xffffff,
+    ior: 2.65,
+    transmission: 1.0,
+    roughness: 0.0,
+    metalness: 0.0,
+  },
+  tsavorite: {
+    color: 0x22aa55,
+    ior: 1.61,
+    transmission: 1.0,
+    roughness: 0.0,
+    metalness: 0.0,
+  },
+  lab_diamond: {
+    color: 0xffffff,
+    ior: 2.42,
+    transmission: 1.0,
+    roughness: 0.0,
+    metalness: 0.0,
+  },
+  alexandrite: {
+    color: 0x006b54,
+    ior: 1.75,
+    transmission: 1.0,
+    roughness: 0.0,
+    metalness: 0.0,
+  },
+  morganite: {
+    color: 0xffc8cb,
+    ior: 1.59,
+    transmission: 1.0,
+    roughness: 0.0,
+    metalness: 0.0,
+  },
+  aquamarine: {
+    color: 0x7fffd4,
+    ior: 1.58,
+    transmission: 1.0,
+    roughness: 0.0,
+    metalness: 0.0,
+  },
+  black_diamond: {
+    color: 0x050505,
+    ior: 2.42,
+    transmission: 0.0,
+    roughness: 0.05,
+    metalness: 0.8,
+  },
 };
 
 export default function Viewer({ glbB64, params, loading }) {
@@ -46,6 +125,8 @@ export default function Viewer({ glbB64, params, loading }) {
 
           if (metalMat) {
             metalMat.color.setHex(mProps.color);
+            metalMat.metalness =
+              mProps.metalness !== undefined ? mProps.metalness : 1.0;
             metalMat.roughness =
               p.finishRoughness !== undefined ? p.finishRoughness : 0.12;
             metalMat.needsUpdate = true;
@@ -54,6 +135,12 @@ export default function Viewer({ glbB64, params, loading }) {
           if (stoneMat) {
             stoneMat.color.setHex(sProps.color);
             stoneMat.ior = sProps.ior || 2.42;
+            stoneMat.transmission =
+              sProps.transmission !== undefined ? sProps.transmission : 1.0;
+            stoneMat.roughness =
+              sProps.roughness !== undefined ? sProps.roughness : 0.0;
+            stoneMat.metalness =
+              sProps.metalness !== undefined ? sProps.metalness : 0.0;
             stoneMat.envMapIntensity =
               p.gemBrilliance !== undefined ? p.gemBrilliance : 2.5;
             stoneMat.needsUpdate = true;
@@ -75,6 +162,9 @@ export default function Viewer({ glbB64, params, loading }) {
     const H = mountRef.current.clientHeight;
 
     const scene = new THREE.Scene();
+
+    window.forgeScene = scene;
+
     const camera = new THREE.PerspectiveCamera(40, W / H, 0.1, 100);
     camera.position.set(0, 1.5, 4.5);
 
@@ -230,7 +320,7 @@ export default function Viewer({ glbB64, params, loading }) {
 
           const metalMat = new THREE.MeshPhysicalMaterial({
             color: mProps.color,
-            metalness: 1.0,
+            metalness: mProps.metalness !== undefined ? mProps.metalness : 1.0,
             roughness:
               p.finishRoughness !== undefined ? p.finishRoughness : 0.1,
             clearcoat: 1.0,
@@ -241,10 +331,11 @@ export default function Viewer({ glbB64, params, loading }) {
 
           const stoneMat = new THREE.MeshPhysicalMaterial({
             color: sProps.color,
-            metalness: 0.0,
-            roughness: 0.0,
-            transmission: 1.0,
-            ior: sProps.ior,
+            metalness: sProps.metalness !== undefined ? sProps.metalness : 0.0,
+            roughness: sProps.roughness !== undefined ? sProps.roughness : 0.0,
+            transmission:
+              sProps.transmission !== undefined ? sProps.transmission : 1.0,
+            ior: sProps.ior || 2.42,
             thickness: 2.5,
             dispersion: 1.5,
             transparent: true,
