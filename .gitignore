@@ -2,6 +2,9 @@
 node_modules/
 __pycache__/
 
+*.mp4
+*.zip
+
 # Environment variables (CRITICAL: Do not leak keys!)
 .env
 
